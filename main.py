@@ -2,18 +2,22 @@
 """
 Israeli Homefront Command – Night Alert Bubble Chart
 =====================================================
-Reads alert history data (Excel / CSV export from Google Sheets or oref.org.il),
-maps each city to its official Homefront Command zone, counts nighttime alerts
-(NIGHT_START – NIGHT_END) per zone, and produces an interactive geographic
-bubble chart saved to output/night_alerts.html.
+Fetches alert history from a Google Sheet (set SHEETS_URL below), maps each
+city to its official Homefront Command zone, counts nighttime alerts
+(NIGHT_START – NIGHT_END) per zone, and saves an interactive geographic
+bubble chart to output/night_alerts.html.
 
-Usage
------
-1. Place your alert data file in the data/ directory
-   (any .xlsx / .xls / .csv file is auto-detected).
+Quick start
+-----------
+1. Share your Google Sheet:  File → Share → "Anyone with the link" → Viewer
 2. pip install -r requirements.txt
 3. python main.py
-4. Open output/night_alerts.html in your browser.
+4. Open output/night_alerts.html
+
+Fallback
+--------
+If the sheet is not publicly accessible, export it as .xlsx / .csv,
+drop it in the data/ directory, and re-run.
 """
 
 import re
@@ -32,7 +36,14 @@ from regions import GROUP_COLORS, NIGHT_END, NIGHT_START, ZONE_GROUP
 CITIES_JSON_URL = (
     "https://raw.githubusercontent.com/eladnava/pikud-haoref-api/master/cities.json"
 )
-DATA_DIR = Path("data")
+
+# Google Sheet ID – set this to your spreadsheet ID and the script will fetch
+# the data automatically (requires the sheet to be shared "Anyone with link").
+# Leave as None to fall back to a local file in data/.
+SHEETS_ID = "14yX1jocodglfqioKvnRaR9oHJ1ppHcb2-8mMZxtKVN8"
+SHEETS_GID = 0   # tab/sheet index (0 = first tab)
+
+DATA_DIR   = Path("data")
 OUTPUT_DIR = Path("output")
 
 
@@ -78,6 +89,37 @@ def load_city_data() -> tuple[dict, dict]:
 
 # ── Alert data loading ────────────────────────────────────────────────────────
 
+def fetch_sheet() -> pd.DataFrame | None:
+    """
+    Try to download the configured Google Sheet as CSV.
+    Returns a DataFrame on success, or None if the sheet is not publicly
+    accessible (in which case we fall back to a local file).
+    """
+    if not SHEETS_ID:
+        return None
+    url = (
+        f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}"
+        f"/export?format=csv&gid={SHEETS_GID}"
+    )
+    print(f"Fetching Google Sheet … ({url})")
+    try:
+        resp = requests.get(url, timeout=30, allow_redirects=True)
+        if resp.status_code != 200 or "text/csv" not in resp.headers.get("Content-Type", ""):
+            print(
+                f"  Sheet not publicly accessible (HTTP {resp.status_code}).\n"
+                "  → In Google Sheets: File → Share → 'Anyone with the link' → Viewer\n"
+                "  → Or export as .xlsx and place in data/"
+            )
+            return None
+        from io import StringIO
+        df = pd.read_csv(StringIO(resp.text), dtype=str)
+        print(f"  Loaded {len(df):,} rows from Google Sheet.")
+        return df
+    except requests.RequestException as exc:
+        print(f"  Could not reach Google Sheet: {exc}")
+        return None
+
+
 def find_data_file() -> Path | None:
     """Return the first .xlsx / .xls / .csv file found in data/."""
     for pattern in ("*.xlsx", "*.xls", "*.csv"):
@@ -116,18 +158,13 @@ def _detect_column(df: pd.DataFrame, keywords: list[str]) -> str | None:
     return None
 
 
-def load_alerts(filepath: Path) -> pd.DataFrame:
+def _normalise_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Load an alert export file and return a DataFrame with columns:
+    Given any raw alert DataFrame, detect the city and time columns and
+    return a normalised DataFrame with just:
       'city_raw'  – raw city/area string (may contain multiple cities)
       'hour'      – integer hour (0–23) or None
     """
-    print(f"Loading {filepath} …")
-    if filepath.suffix.lower() == ".csv":
-        df = pd.read_csv(filepath, dtype=str)
-    else:
-        df = pd.read_excel(filepath, dtype=str)
-
     print(f"  {len(df):,} rows  |  columns: {list(df.columns)}")
 
     # ── Detect city column ────────────────────────────────────────────────
@@ -135,23 +172,18 @@ def load_alerts(filepath: Path) -> pd.DataFrame:
                      "data", "ערים", "עיר", "אזור", "מיקום"]
     city_col = _detect_column(df, city_keywords)
     if city_col is None:
-        # Fall back to first object column
         for col in df.columns:
             if df[col].dtype == object:
                 city_col = col
                 break
     if city_col is None:
-        raise ValueError("Could not detect a city/area column in the data file.")
+        raise ValueError("Could not detect a city/area column in the data.")
     print(f"  Using city column: '{city_col}'")
 
     # ── Detect datetime / time column ────────────────────────────────────
-    dt_keywords   = ["datetime", "timestamp", "alertdate", "alert_date"]
-    time_keywords = ["time", "שעה", "hour"]
-    date_keywords = ["date", "תאריך"]
-
-    dt_col   = _detect_column(df, dt_keywords)
-    time_col = _detect_column(df, time_keywords) if dt_col is None else None
-    date_col = _detect_column(df, date_keywords) if dt_col is None else None
+    dt_col   = _detect_column(df, ["datetime", "timestamp", "alertdate", "alert_date"])
+    time_col = _detect_column(df, ["time", "שעה", "hour"]) if dt_col is None else None
+    date_col = _detect_column(df, ["date", "תאריך"])       if dt_col is None else None
 
     if dt_col:
         print(f"  Using datetime column: '{dt_col}'")
@@ -167,6 +199,16 @@ def load_alerts(filepath: Path) -> pd.DataFrame:
         hours = [None] * len(df)
 
     return pd.DataFrame({"city_raw": df[city_col].astype(str), "hour": hours})
+
+
+def load_alerts(filepath: Path) -> pd.DataFrame:
+    """Load an alert export file (.xlsx / .xls / .csv) and normalise it."""
+    print(f"Loading {filepath} …")
+    if filepath.suffix.lower() == ".csv":
+        raw = pd.read_csv(filepath, dtype=str)
+    else:
+        raw = pd.read_excel(filepath, dtype=str)
+    return _normalise_df(raw)
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
@@ -350,19 +392,22 @@ def main() -> None:
     # 1. City → zone mapping (fetched from GitHub)
     city_to_zone, zone_centroid = load_city_data()
 
-    # 2. Alert data file
-    data_file = find_data_file()
-    if data_file is None:
-        print(
-            "\nNo data file found in data/\n"
-            "Please place your alert export there as .xlsx, .xls, or .csv\n"
-            "  e.g.  data/alerts.xlsx\n"
-            "\nTo export from Google Sheets:\n"
-            "  File → Download → Microsoft Excel (.xlsx)"
-        )
-        sys.exit(1)
-
-    df = load_alerts(data_file)
+    # 2. Alert data — Google Sheet first, then local file fallback
+    raw_df = fetch_sheet()
+    if raw_df is not None:
+        # Sheet was fetched successfully; wrap in the same normalisation step
+        df = _normalise_df(raw_df)
+    else:
+        data_file = find_data_file()
+        if data_file is None:
+            print(
+                "\nNo data found.\n"
+                "Either:\n"
+                "  a) Share your Google Sheet publicly and re-run, or\n"
+                "  b) Export it as .xlsx / .csv and place in data/"
+            )
+            sys.exit(1)
+        df = load_alerts(data_file)
 
     # 3. Aggregate by zone
     print("\nAggregating alerts by zone …")
