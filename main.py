@@ -531,6 +531,11 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     body.light #modal-close:hover {{ color: #000; }}
     #modal-body {{ overflow-y: auto; flex: 1; padding: 10px; }}
     #modal-chart {{ width: 100%; }}
+    #date-select {{
+      background: #252540; color: #ccc; border: 1px solid #444;
+      border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer;
+    }}
+    body.light #date-select {{ background: #fff; color: #333; border-color: #bbb; }}
   </style>
 </head>
 <body>
@@ -542,6 +547,9 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     <button class="tb-btn active" onclick="setView('hour')" id="btn-hour">&#9200;&nbsp;By Hour</button>
     <button class="tb-btn"        onclick="setView('date')" id="btn-date">&#128197;&nbsp;By Date</button>
     <div id="sep2" style="width:1px;height:22px;background:#333;margin:0 4px;flex-shrink:0;"></div>
+    <label for="date-select" style="font-size:12px;color:#aaa;white-space:nowrap;">Date:</label>
+    <select id="date-select" onchange="onDateSelect(this.value)"></select>
+    <div id="sep3" style="width:1px;height:22px;background:#333;margin:0 4px;flex-shrink:0;"></div>
     <span id="type-label">Alert type:</span>
     <div id="type-btns" style="display:flex;gap:6px;"></div>
   </div>
@@ -603,6 +611,25 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     Plotly.newPlot('date-mini-chart', miniData, miniLayout, {{responsive:true}});
     Plotly.newPlot('date-full-chart', dateData, dateLayout, {{responsive:true}});
 
+    // ── Populate date selector ───────────────────────────────────────────────
+    (function() {{
+      var sel = document.getElementById('date-select');
+      var dates = [...new Set(hourlyData.map(function(r) {{ return r.date_str; }}))].sort();
+      var opt0 = document.createElement('option');
+      opt0.value = ''; opt0.textContent = 'All dates';
+      sel.appendChild(opt0);
+      dates.forEach(function(d) {{
+        var opt = document.createElement('option');
+        opt.value = d; opt.textContent = d;
+        sel.appendChild(opt);
+      }});
+    }})();
+
+    function onDateSelect(val) {{
+      currentDateRange = val ? [val, val] : null;
+      updateHourChart();
+    }}
+
     // Build alert-type toggle buttons
     var typeBtnsEl = document.getElementById('type-btns');
     allTypes.forEach(function(t) {{
@@ -619,8 +646,15 @@ def build_chart(chart_df: pd.DataFrame) -> None:
       var r0 = e['xaxis.range[0]'], r1 = e['xaxis.range[1]'];
       if (r0 !== undefined) {{
         currentDateRange = [r0.slice(0,10), r1.slice(0,10)];
+        // If range collapses to a single day, sync the dropdown
+        if (currentDateRange[0] === currentDateRange[1]) {{
+          document.getElementById('date-select').value = currentDateRange[0];
+        }} else {{
+          document.getElementById('date-select').value = '';
+        }}
       }} else if (e['xaxis.autorange']) {{
         currentDateRange = null;
+        document.getElementById('date-select').value = '';
       }}
       if (currentView === 'hour') updateHourChart();
     }});
