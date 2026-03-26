@@ -755,7 +755,6 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     Plotly.newPlot('main-chart',      hourData, hourLayout, {{responsive:true}});
     Plotly.newPlot('date-mini-chart', miniData, miniLayout, {{responsive:true}});
     Plotly.newPlot('date-full-chart', dateData, dateLayout, {{responsive:true}});
-    buildMismatchCharts('');
 
     // ── Populate date selector ───────────────────────────────────────────────
     (function() {{
@@ -982,6 +981,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         sel.appendChild(o);
       }});
     }})();
+    buildMismatchCharts('');
 
     function onMismatchRegion(val) {{
       mismatchRegion = val;
