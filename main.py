@@ -17,6 +17,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -35,8 +36,9 @@ CITIES_JSON_URL = (
 SHEETS_ID  = "14yX1jocodglfqioKvnRaR9oHJ1ppHcb2-8mMZxtKVN8"
 SHEETS_GID = 0
 
-DATA_DIR   = Path("data")
-OUTPUT_DIR = Path("output")
+DATA_DIR    = Path("data")
+OUTPUT_DIR  = Path("output")
+PAIR_WINDOW = timedelta(minutes=15)   # max gap between pre-alert and missile alert
 
 
 # ── City / Zone helpers ───────────────────────────────────────────────────────
@@ -258,21 +260,110 @@ def aggregate(
     return dict(zone_total), dict(zone_night), chart_df
 
 
+# ── Mismatch analysis ─────────────────────────────────────────────────────────
+
+def compute_mismatches(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
+    """
+    For each city, pair Pre-alerts with Missile alerts within PAIR_WINDOW.
+
+    A Pre-alert is 'paired'      if a Missile alert follows within 15 min.
+    A Pre-alert is 'pre_only'    if no Missile alert follows within 15 min.
+    A Missile alert is 'missile_only' if no Pre-alert preceded it within 15 min.
+
+    Drone alerts are excluded from pairing.
+
+    Returns DataFrame: [city, zone, group, date_str, event_type]
+    where event_type ∈ {'paired', 'pre_only', 'missile_only'}.
+    """
+    # Build per-city alert lists
+    city_events: dict = defaultdict(list)
+    for _, row in df.iterrows():
+        raw        = str(row["city_raw"]).strip()
+        dt         = row["dt"]
+        alert_type = str(row.get("alert_type", "Unknown"))
+        if dt is None or pd.isna(dt):
+            continue
+        if alert_type not in ("Pre-alert", "Missile alert"):
+            continue
+        cities = [c.strip() for c in re.split(r"[,،;|\n]+", raw) if c.strip()]
+        for city in cities:
+            city_events[city].append((dt, alert_type))
+
+    rows = []
+    for city, events in city_events.items():
+        zone = city_to_zone.get(city)
+        if not zone:
+            continue
+        group = ZONE_GROUP.get(zone, "Other")
+
+        pre_dts     = sorted(dt for dt, t in events if t == "Pre-alert")
+        missile_dts = sorted(dt for dt, t in events if t == "Missile alert")
+
+        # Pre-alerts: paired if any missile follows within PAIR_WINDOW
+        for pre_dt in pre_dts:
+            matched = any(
+                pre_dt <= m <= pre_dt + PAIR_WINDOW for m in missile_dts
+            )
+            rows.append({
+                "city": city, "zone": zone, "group": group,
+                "date_str":   pre_dt.strftime("%Y-%m-%d"),
+                "event_type": "paired" if matched else "pre_only",
+            })
+
+        # Missile alerts: missile_only if no pre-alert preceded within PAIR_WINDOW
+        for m_dt in missile_dts:
+            matched = any(
+                m_dt - PAIR_WINDOW <= p <= m_dt for p in pre_dts
+            )
+            if not matched:
+                rows.append({
+                    "city": city, "zone": zone, "group": group,
+                    "date_str":   m_dt.strftime("%Y-%m-%d"),
+                    "event_type": "missile_only",
+                })
+
+    if rows:
+        return pd.DataFrame(rows)
+    return pd.DataFrame(columns=["city", "zone", "group", "date_str", "event_type"])
+
+
+def mismatch_daily_data(mismatch_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate mismatch events per calendar day.
+    Returns DataFrame: [date_str, paired, pre_only, missile_only].
+    """
+    if mismatch_df.empty:
+        return pd.DataFrame(columns=["date_str", "paired", "pre_only", "missile_only"])
+
+    counts = (
+        mismatch_df.groupby(["date_str", "event_type"])
+        .size()
+        .reset_index(name="count")
+        .pivot(index="date_str", columns="event_type", values="count")
+        .fillna(0)
+        .astype(int)
+        .reset_index()
+    )
+    for col in ("paired", "pre_only", "missile_only"):
+        if col not in counts.columns:
+            counts[col] = 0
+
+    return counts[["date_str", "paired", "pre_only", "missile_only"]].sort_values("date_str")
+
+
 # ── Chart ─────────────────────────────────────────────────────────────────────
 
-def build_chart(chart_df: pd.DataFrame) -> None:
+def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None) -> None:
     """
-    Full-screen interactive chart with two views toggled by a tab bar:
+    Full-screen interactive chart with three views toggled by a tab bar:
 
-    "By Hour"  – stacked bar chart, X=hour 0-23, Y=alert count per region.
-                 A date range selector (mini sparkline below) and alert-type
-                 toggle buttons filter the data in-place via JS.
-    "By Date"  – cumulative step lines, X=date, Y=running total per region,
-                 with Plotly's built-in range selector buttons.
+    "By Hour"    – stacked bar chart, X=hour 0-23, Y=alert count per region.
+    "By Date"    – cumulative step lines, X=date, Y=running total per region.
+    "Mismatches" – stacked bar chart showing paired / pre_only / missile_only
+                   event counts per day; toggle between absolute and % view.
 
-    Clicking any bar / line opens a small-multiples modal (day-by-day hourly
-    bars for that region, filtered to the current date+type selection).
-    Dark / light toggle persists across both views.
+    Clicking any bar / line in Hour or Date views opens a small-multiples modal.
+    Dark / light toggle persists across all views.
     """
     if chart_df.empty:
         print("\nNo data to chart – check that city column matched correctly.")
@@ -416,6 +507,65 @@ def build_chart(chart_df: pd.DataFrame) -> None:
         margin=dict(t=80, b=60, l=70, r=40),
     )
 
+    # ── Mismatch stacked bar chart ─────────────────────────────────────────
+    if mismatch_df is not None and not mismatch_df.empty:
+        md = mismatch_daily_data(mismatch_df)
+        m_idx   = md.set_index("date_str")
+        m_dates = md["date_str"].tolist()
+        mismatch_traces = []
+        for evt_type, color, label in (
+            ("paired",       "#2ca02c", "Paired"),
+            ("pre_only",     "#f5c542", "Pre-alert only"),
+            ("missile_only", "#d62728", "Missile only"),
+        ):
+            ys = [int(m_idx.loc[d, evt_type]) if d in m_idx.index else 0 for d in m_dates]
+            mismatch_traces.append(go.Bar(
+                x=m_dates, y=ys, name=label,
+                marker=dict(color=color),
+                hovertemplate=f"<b>{label}</b><br>%{{x}}: <b>%{{y:,}}</b><extra></extra>",
+            ))
+        mismatch_fig = go.Figure(mismatch_traces)
+        mismatch_fig.update_layout(
+            barmode="stack",
+            title=dict(
+                text="IDF Homefront Command — Pre-alert / Missile Mismatch by Day<br>"
+                     "<sup>City-level pairing · 15-minute window · toggle Abs / % above</sup>",
+                x=0.5, font=dict(size=15, color="#cccccc"),
+            ),
+            xaxis=dict(
+                title="Date", showgrid=True, gridcolor="#2a2a3e",
+                zeroline=False, color="#cccccc",
+                rangeslider=dict(visible=True, thickness=0.05),
+                rangeselector=dict(
+                    buttons=[
+                        dict(count=7,  label="1w",  step="day", stepmode="backward"),
+                        dict(count=14, label="2w",  step="day", stepmode="backward"),
+                        dict(step="all", label="All"),
+                    ],
+                    bgcolor="#252540", activecolor="#444470",
+                    font=dict(color="#cccccc"),
+                ),
+            ),
+            yaxis=dict(
+                title="Event Count", showgrid=True,
+                gridcolor="#2a2a3e", zeroline=False, color="#cccccc",
+            ),
+            plot_bgcolor="#1a1a2e", paper_bgcolor="#0f0f1a",
+            font=dict(family="Arial, Helvetica, sans-serif", color="#cccccc"),
+            legend=dict(
+                title=dict(text="Event type"), font=dict(size=11, color="#cccccc"),
+                bgcolor="rgba(26,26,46,0.85)", bordercolor="#444", borderwidth=1,
+            ),
+            margin=dict(t=80, b=60, l=70, r=40),
+        )
+    else:
+        mismatch_fig = go.Figure()
+        mismatch_fig.update_layout(
+            title=dict(text="No mismatch data available", x=0.5,
+                       font=dict(size=14, color="#cccccc")),
+            plot_bgcolor="#1a1a2e", paper_bgcolor="#0f0f1a",
+        )
+
     # ── Serialise everything for JS ────────────────────────────────────────
     def fig_json(fig):
         d = json.loads(fig.to_json())
@@ -424,6 +574,7 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     hour_data_js,      hour_layout_js      = fig_json(hour_fig)
     date_mini_data_js, date_mini_layout_js = fig_json(date_mini_fig)
     date_data_js,      date_layout_js      = fig_json(date_fig)
+    mismatch_data_js,  mismatch_layout_js  = fig_json(mismatch_fig)
 
     hourly_js      = json.dumps(chart_df.to_dict(orient="records"))
     group_colors_js = json.dumps(GROUP_COLORS)
@@ -485,7 +636,7 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     #type-label {{ font-size: 11px; color: #777; white-space: nowrap; }}
 
     /* ── Chart area ── */
-    #view-hour, #view-date {{ position: absolute; left:0; right:0; }}
+    #view-hour, #view-date, #view-mismatch {{ position: absolute; left:0; right:0; }}
     #view-hour {{
       top: 46px;
       bottom: 180px;   /* room for date slider */
@@ -495,7 +646,12 @@ def build_chart(chart_df: pd.DataFrame) -> None:
       bottom: 0;
       display: none;
     }}
-    #main-chart, #date-full-chart {{ width:100%; height:100%; }}
+    #view-mismatch {{
+      top: 46px;
+      bottom: 0;
+      display: none;
+    }}
+    #main-chart, #date-full-chart, #mismatch-chart {{ width:100%; height:100%; }}
     #date-mini-wrap {{
       position: fixed; bottom: 0; left: 0; right: 0;
       height: 180px; z-index: 50;
@@ -544,14 +700,19 @@ def build_chart(chart_df: pd.DataFrame) -> None:
   <div id="topbar">
     <button class="tb-btn" onclick="toggleTheme()" id="theme-btn">&#9728;&#65039;&nbsp;Light</button>
     <div id="sep"></div>
-    <button class="tb-btn active" onclick="setView('hour')" id="btn-hour">&#9200;&nbsp;By Hour</button>
-    <button class="tb-btn"        onclick="setView('date')" id="btn-date">&#128197;&nbsp;By Date</button>
+    <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
+    <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
+    <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
     <div id="sep2" style="width:1px;height:22px;background:#333;margin:0 4px;flex-shrink:0;"></div>
-    <label for="date-select" style="font-size:12px;color:#aaa;white-space:nowrap;">Date:</label>
+    <label for="date-select" id="date-select-label" style="font-size:12px;color:#aaa;white-space:nowrap;">Date:</label>
     <select id="date-select" onchange="onDateSelect(this.value)"></select>
     <div id="sep3" style="width:1px;height:22px;background:#333;margin:0 4px;flex-shrink:0;"></div>
     <span id="type-label">Alert type:</span>
     <div id="type-btns" style="display:flex;gap:6px;"></div>
+    <div id="mismatch-controls" style="display:none;align-items:center;gap:6px;">
+      <div style="width:1px;height:22px;background:#333;margin:0 4px;"></div>
+      <button class="tb-btn" onclick="toggleMismatchMode()" id="mismatch-mode-btn">%&nbsp;View</button>
+    </div>
   </div>
 
   <!-- By-hour view -->
@@ -567,6 +728,11 @@ def build_chart(chart_df: pd.DataFrame) -> None:
   <!-- By-date cumulative view -->
   <div id="view-date">
     <div id="date-full-chart"></div>
+  </div>
+
+  <!-- Mismatch view -->
+  <div id="view-mismatch">
+    <div id="mismatch-chart"></div>
   </div>
 
   <!-- Small-multiples modal -->
@@ -588,12 +754,14 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     var allGroups    = {groups_js};
     var allTypes     = {alert_types_js};
 
-    var hourData    = {hour_data_js};
-    var hourLayout  = {hour_layout_js};
-    var miniData    = {date_mini_data_js};
-    var miniLayout  = {date_mini_layout_js};
-    var dateData    = {date_data_js};
-    var dateLayout  = {date_layout_js};
+    var hourData        = {hour_data_js};
+    var hourLayout      = {hour_layout_js};
+    var miniData        = {date_mini_data_js};
+    var miniLayout      = {date_mini_layout_js};
+    var dateData        = {date_data_js};
+    var dateLayout      = {date_layout_js};
+    var mismatchData    = {mismatch_data_js};
+    var mismatchLayout  = {mismatch_layout_js};
 
     var darkMain    = {dark_main};
     var lightMain   = {light_main};
@@ -607,9 +775,10 @@ def build_chart(chart_df: pd.DataFrame) -> None:
     var activeTypes       = new Set(allTypes);
 
     // ── Init ─────────────────────────────────────────────────────────────────
-    Plotly.newPlot('main-chart',      hourData, hourLayout, {{responsive:true}});
-    Plotly.newPlot('date-mini-chart', miniData, miniLayout, {{responsive:true}});
-    Plotly.newPlot('date-full-chart', dateData, dateLayout, {{responsive:true}});
+    Plotly.newPlot('main-chart',      hourData,     hourLayout,     {{responsive:true}});
+    Plotly.newPlot('date-mini-chart', miniData,     miniLayout,     {{responsive:true}});
+    Plotly.newPlot('date-full-chart', dateData,     dateLayout,     {{responsive:true}});
+    Plotly.newPlot('mismatch-chart',  mismatchData, mismatchLayout, {{responsive:true}});
 
     // ── Populate date selector ───────────────────────────────────────────────
     (function() {{
@@ -672,18 +841,24 @@ def build_chart(chart_df: pd.DataFrame) -> None:
 
     function setView(v) {{
       currentView = v;
-      document.getElementById('view-hour').style.display      = v === 'hour' ? 'block' : 'none';
-      document.getElementById('view-date').style.display      = v === 'date' ? 'block' : 'none';
-      document.getElementById('date-mini-wrap').style.display = v === 'hour' ? 'block' : 'none';
-      document.getElementById('btn-hour').classList.toggle('active', v === 'hour');
-      document.getElementById('btn-date').classList.toggle('active', v === 'date');
-      document.getElementById('type-label').style.display = v === 'hour' ? 'inline' : 'none';
-      document.getElementById('type-btns').style.display  = v === 'hour' ? 'flex'   : 'none';
+      document.getElementById('view-hour').style.display      = v === 'hour'     ? 'block' : 'none';
+      document.getElementById('view-date').style.display      = v === 'date'     ? 'block' : 'none';
+      document.getElementById('view-mismatch').style.display  = v === 'mismatch' ? 'block' : 'none';
+      document.getElementById('date-mini-wrap').style.display = v === 'hour'     ? 'block' : 'none';
+      document.getElementById('btn-hour').classList.toggle('active',     v === 'hour');
+      document.getElementById('btn-date').classList.toggle('active',     v === 'date');
+      document.getElementById('btn-mismatch').classList.toggle('active', v === 'mismatch');
+      document.getElementById('type-label').style.display        = v === 'hour'     ? 'inline' : 'none';
+      document.getElementById('type-btns').style.display         = v === 'hour'     ? 'flex'   : 'none';
+      document.getElementById('date-select-label').style.display = v === 'hour'     ? 'inline' : 'none';
+      document.getElementById('date-select').style.display       = v === 'hour'     ? 'inline' : 'none';
+      document.getElementById('sep3').style.display              = v === 'hour'     ? 'block'  : 'none';
+      document.getElementById('mismatch-controls').style.display = v === 'mismatch' ? 'flex'   : 'none';
       // Force Plotly to redraw at the now-correct dimensions
       setTimeout(function() {{
-        if (v === 'date') {{
-          Plotly.Plots.resize('date-full-chart');
-        }} else {{
+        if (v === 'date')          {{ Plotly.Plots.resize('date-full-chart'); }}
+        else if (v === 'mismatch') {{ Plotly.Plots.resize('mismatch-chart'); }}
+        else {{
           Plotly.Plots.resize('main-chart');
           Plotly.Plots.resize('date-mini-chart');
         }}
@@ -798,6 +973,41 @@ def build_chart(chart_df: pd.DataFrame) -> None:
       Plotly.purge('modal-chart');
     }}
 
+    // ── Mismatch mode toggle (abs ↔ %) ──────────────────────────────────────
+    var mismatchIsPct = false;
+
+    function toggleMismatchMode() {{
+      mismatchIsPct = !mismatchIsPct;
+      document.getElementById('mismatch-mode-btn').innerHTML =
+        mismatchIsPct ? 'Abs&nbsp;View' : '%&nbsp;View';
+      renderMismatchChart();
+    }}
+
+    function renderMismatchChart() {{
+      if (!mismatchIsPct) {{
+        Plotly.react('mismatch-chart', mismatchData, mismatchLayout);
+        return;
+      }}
+      // Compute per-date totals and convert to percentages
+      var totals = {{}};
+      mismatchData.forEach(function(trace) {{
+        (trace.x || []).forEach(function(date, i) {{
+          totals[date] = (totals[date] || 0) + ((trace.y || [])[i] || 0);
+        }});
+      }});
+      var pctTraces = mismatchData.map(function(trace) {{
+        var pctY = (trace.x || []).map(function(date, i) {{
+          var total = totals[date] || 1;
+          return parseFloat(((trace.y[i] || 0) / total * 100).toFixed(1));
+        }});
+        return Object.assign({{}}, trace, {{y: pctY}});
+      }});
+      var pctLayout = JSON.parse(JSON.stringify(mismatchLayout));
+      if (!pctLayout.yaxis) pctLayout.yaxis = {{}};
+      pctLayout.yaxis.title = '% of Events';
+      Plotly.react('mismatch-chart', pctTraces, pctLayout);
+    }}
+
     // ── Dark / light toggle ─────────────────────────────────────────────────
     function toggleTheme() {{
       isDark = !isDark;
@@ -807,6 +1017,7 @@ def build_chart(chart_df: pd.DataFrame) -> None:
       Plotly.relayout('main-chart',      isDark ? darkMain : lightMain);
       Plotly.relayout('date-mini-chart', isDark ? darkMini : lightMini);
       Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
+      Plotly.relayout('mismatch-chart',  isDark ? darkMain : lightMain);
       document.getElementById('date-mini-wrap').style.background =
         isDark ? '#0f0f1a' : '#fafafa';
     }}
@@ -873,8 +1084,22 @@ def main() -> None:
     # 4. Summary table
     print_summary(zone_total, zone_night)
 
-    # 5. Chart
-    build_chart(chart_df)
+    # 5. Pre-alert / missile mismatch analysis
+    print("\nComputing pre-alert / missile mismatches …")
+    mismatch_df = compute_mismatches(df, city_to_zone)
+    if not mismatch_df.empty:
+        counts = mismatch_df["event_type"].value_counts()
+        print(f"  paired       : {counts.get('paired', 0):,}")
+        print(f"  pre_only     : {counts.get('pre_only', 0):,}")
+        print(f"  missile_only : {counts.get('missile_only', 0):,}")
+
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        xlsx_path = OUTPUT_DIR / "mismatches.xlsx"
+        mismatch_df.to_excel(xlsx_path, index=False)
+        print(f"  Saved → {xlsx_path}")
+
+    # 6. Chart
+    build_chart(chart_df, mismatch_df)
     print("\nDone.  Open output/night_alerts.html in your browser.")
 
 
