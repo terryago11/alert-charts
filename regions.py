@@ -29,6 +29,7 @@ ZONE_GROUP: dict[str, str] = {
     # ── Golan ──────────────────────────────────────────────────────────────
     "Northern Golan":      "Golan",
     "Golan South":         "Golan",
+    "Southern Golan":      "Golan",
     "Confrontation Line":  "Golan",
 
     # ── Galilee ────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ ZONE_GROUP: dict[str, str] = {
     "HaCarmel":            "Haifa Area",
     "Menashe":             "Haifa Area",
     "Wadi Ara":            "Haifa Area",
+    "Baka":                "Haifa Area",
 
     # ── West Bank (Judea & Samaria) ────────────────────────────────────────
     "Judea Foothills":     "West Bank",
@@ -51,13 +53,18 @@ ZONE_GROUP: dict[str, str] = {
     "Yehuda":              "West Bank",
     "Shomron":             "West Bank",
 
-    # ── Central Israel ─────────────────────────────────────────────────────
-    "Dan":                 "Central",
-    "Yarkon":              "Central",
-    "Sharon":              "Central",
-    "HaShfela":            "Central",
-    "Lachish":             "Central",
-    "Jerusalem":           "Central",
+    # ── Tel Aviv / Gush Dan ────────────────────────────────────────────────
+    "Dan":                 "Tel Aviv / Gush Dan",
+    "Yarkon":              "Tel Aviv / Gush Dan",
+
+    # ── Sharon / Shephelah ─────────────────────────────────────────────────
+    "Sharon":              "Sharon / Shephelah",
+    "HaShfela":            "Sharon / Shephelah",
+    "Lachish":             "Sharon / Shephelah",
+    "West Lachish":        "Sharon / Shephelah",
+
+    # ── Jerusalem ──────────────────────────────────────────────────────────
+    "Jerusalem":           "Jerusalem",
 
     # ── Gaza Envelope / Western Negev ──────────────────────────────────────
     "Gaza Envelope":       "Gaza Area",
@@ -66,6 +73,7 @@ ZONE_GROUP: dict[str, str] = {
     # ── Negev / Beer Sheva ─────────────────────────────────────────────────
     "Center Negev":        "Beer Sheva / Negev",
     "Southern Negev":      "Beer Sheva / Negev",
+    "South Negev":         "Beer Sheva / Negev",
 
     # ── Arava / Dead Sea ───────────────────────────────────────────────────
     "Aravah":              "Arava",
@@ -76,13 +84,15 @@ ZONE_GROUP: dict[str, str] = {
 }
 
 GROUP_COLORS: dict[str, str] = {
-    "Golan":              "#2ca02c",   # dark green
-    "Galilee":            "#98df8a",   # light green
-    "Haifa Area":         "#17becf",   # teal
-    "West Bank":          "#9467bd",   # purple
-    "Central":            "#1f77b4",   # blue
-    "Gaza Area":          "#d62728",   # red
-    "Beer Sheva / Negev": "#ff7f0e",   # orange
-    "Arava":              "#ffbb78",   # pale orange
-    "Eilat":              "#bcbd22",   # yellow-green
+    "Golan":                "#2ca02c",   # dark green
+    "Galilee":              "#98df8a",   # light green
+    "Haifa Area":           "#17becf",   # teal
+    "West Bank":            "#9467bd",   # purple
+    "Tel Aviv / Gush Dan":  "#56aeff",   # bright sky blue
+    "Sharon / Shephelah":   "#aec7e8",   # pale blue
+    "Jerusalem":            "#f5c542",   # gold
+    "Gaza Area":            "#d62728",   # red
+    "Beer Sheva / Negev":   "#ff7f0e",   # orange
+    "Arava":                "#ffbb78",   # pale orange
+    "Eilat":                "#e377c2",   # pink
 }
