@@ -527,10 +527,14 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     )
 
     # ── Mismatch records for JS-side chart building ────────────────────────
+    # Pre-aggregate to (group, date_str, event_type, count) — much smaller than raw rows
     if mismatch_df is not None and not mismatch_df.empty:
-        mismatch_records_js = json.dumps(
-            mismatch_df[["group", "date_str", "event_type"]].to_dict(orient="records")
+        mismatch_agg = (
+            mismatch_df.groupby(["group", "date_str", "event_type"])
+            .size()
+            .reset_index(name="count")
         )
+        mismatch_records_js = json.dumps(mismatch_agg.to_dict(orient="records"))
     else:
         mismatch_records_js = "[]"
 
@@ -720,7 +724,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     </div>
   </div>
 
-  <script src="https://cdn.plot.ly/plotly-latest.min.js" charset="utf-8"></script>
+  <script src="plotly.min.js" charset="utf-8"></script>
   <script>
     // ── Data ────────────────────────────────────────────────────────────────
     var hourlyData   = {hourly_js};
@@ -1003,7 +1007,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           dateMap[r.date_str] = {{paired_missile:0,paired_drone:0,pre_only:0,missile_only:0,drone_only:0}};
         }}
         if (dateMap[r.date_str][r.event_type] !== undefined) {{
-          dateMap[r.date_str][r.event_type]++;
+          dateMap[r.date_str][r.event_type] += r.count;
         }}
       }});
 
@@ -1053,7 +1057,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         return {{
           type:'bar', x:dates, y:ys, name:EVT_LABELS[et],
           marker:{{color:EVT_COLORS[et]}},
-          hovertemplate:'<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: <b>%{{y'+(mismatchIsPct?'.1f':',')}}</b>'+(mismatchIsPct?'%':'')+'<extra></extra>',
+          hovertemplate: mismatchIsPct
+            ? '<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: <b>%{{y:.1f}}</b>%<extra></extra>'
+            : '<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: <b>%{{y:,}}</b><extra></extra>',
         }};
       }});
       barTraces.push({{
