@@ -43,26 +43,30 @@ PAIR_WINDOW = timedelta(minutes=15)   # max gap between pre-alert and missile al
 
 # ── City / Zone helpers ───────────────────────────────────────────────────────
 
+CITY_MAPPING_CSV = DATA_DIR / "city_region_mapping.csv"
+
+
 def load_city_data() -> Tuple[dict, dict]:
-    """Return (city_to_zone, zone_centroid) from pikud-haoref-api."""
-    print("Fetching city→zone mapping from pikud-haoref-api …")
-    resp = requests.get(CITIES_JSON_URL, timeout=30)
-    resp.raise_for_status()
-    cities = resp.json()
+    """Return (city_to_zone, zone_centroid) from local city_region_mapping.csv."""
+    print(f"Loading city→zone mapping from {CITY_MAPPING_CSV} …")
+    mapping = pd.read_csv(CITY_MAPPING_CSV, dtype=str)
 
     city_to_zone: dict = {}
     zone_coords: dict  = defaultdict(list)
 
-    for entry in cities:
-        name    = (entry.get("name") or entry.get("value") or "").strip()
-        zone_en = (entry.get("zone_en") or "").strip()
-        lat     = entry.get("lat")
-        lng     = entry.get("lng")
+    for _, row in mapping.iterrows():
+        name    = str(row.get("city_he") or "").strip()
+        zone_en = str(row.get("zone")    or "").strip()
+        try:
+            lat = float(row["lat"])
+            lng = float(row["lng"])
+        except (KeyError, ValueError, TypeError):
+            lat = lng = None
 
         if name and zone_en and zone_en != "Select All":
             city_to_zone[name] = zone_en
         if zone_en and zone_en != "Select All" and lat is not None and lng is not None:
-            zone_coords[zone_en].append((float(lat), float(lng)))
+            zone_coords[zone_en].append((lat, lng))
 
     zone_centroid = {
         zone: (
@@ -1161,20 +1165,12 @@ def main() -> None:
     # 1. City → zone mapping
     city_to_zone, _ = load_city_data()
 
-    # 2. Alert data — Google Sheet first, then local file fallback
-    raw_df = fetch_sheet()
-    if raw_df is not None:
-        df = _normalise_df(raw_df)
-    else:
-        data_file = find_data_file()
-        if data_file is None:
-            print(
-                "\nNo data found.\n"
-                "Either share your Google Sheet publicly and re-run, or\n"
-                "export it as .xlsx / .csv and place in data/"
-            )
-            sys.exit(1)
-        df = load_alerts(data_file)
+    # 2. Alert data — local file only
+    data_file = find_data_file()
+    if data_file is None:
+        print("\nNo data found.\nPlace an .xlsx, .xls, or .csv export in data/")
+        sys.exit(1)
+    df = load_alerts(data_file)
 
     # 3. Aggregate (with deduplication)
     print("\nAggregating alerts by zone …")
