@@ -12,7 +12,7 @@ HTML dashboard at `output/ira_alerts.html`.
 - **pandas** — data wrangling
 - **plotly** (Python + JS) — chart rendering; Python builds the figure objects,
   serialises them to JSON, and inlines them into the HTML template
-- **requests** — fetching cities.json and Google Sheets export
+- **requests** — fetching cities.json and GitHub CSV
 - Output is a single static HTML file (no server needed)
 
 ## Quick start
@@ -27,7 +27,7 @@ open output/ira_alerts.html
 
 | Source | How to configure |
 |--------|-----------------|
-| Google Sheets (live) | Set `SHEETS_ID` / `SHEETS_GID` in `main.py`; sheet must be publicly accessible |
+| GitHub CSV (live) | Fetched automatically from `dleshem/israel-alerts-data`; set `CUTOFF_DATE` in `main.py` to adjust the start of the monitoring period |
 | Local file (fallback) | Place any `.xlsx`, `.xls`, or `.csv` in `data/` |
 
 Alert data must have columns for city/location, date+time, and alert type.

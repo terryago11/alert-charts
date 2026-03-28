@@ -38,17 +38,17 @@ Toggle between absolute counts and percentage (ratio) view.
 # Install dependencies
 pip install -r requirements.txt
 
-# Run (fetches latest data from Google Sheets or uses local file in data/)
+# Run (fetches latest data from GitHub or uses local file in data/)
 python main.py
 
 # Open the dashboard
-open output/night_alerts.html
+open output/ira_alerts.html
 ```
 
 ## Data sources
 
 The dashboard loads alert data from one of:
-1. **Google Sheets** — configure `SHEETS_ID` in `main.py`; the sheet must be publicly accessible
+1. **GitHub** — fetched automatically from [dleshem/israel-alerts-data](https://github.com/dleshem/israel-alerts-data); no configuration needed
 2. **Local file fallback** — place any `.xlsx`, `.xls`, or `.csv` export in the `data/` folder
 
 City → zone mapping is fetched automatically from
