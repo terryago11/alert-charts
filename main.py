@@ -4,20 +4,20 @@ Israeli Homefront Command – Alert Bubble Chart
 ===============================================
 Loads alert history, maps each city to its Homefront Command zone, deduplicates
 per-zone per-minute, then saves a full-screen interactive chart to
-output/night_alerts.html with a dark/light mode toggle.
+output/ira_alerts.html with a dark/light mode toggle.
 
 Quick start
 -----------
 1. pip install -r requirements.txt
 2. python main.py
-3. Open output/night_alerts.html
+3. Open output/ira_alerts.html
 """
 
 import json
 import re
 import sys
 from collections import defaultdict
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -33,8 +33,13 @@ CITIES_JSON_URL = (
     "https://raw.githubusercontent.com/eladnava/pikud-haoref-api/master/cities.json"
 )
 
-SHEETS_ID  = "14yX1jocodglfqioKvnRaR9oHJ1ppHcb2-8mMZxtKVN8"
-SHEETS_GID = 0
+GITHUB_CSV_URL = "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
+CUTOFF_DATE    = pd.Timestamp("2026-02-28")
+ALERT_TRANSLATIONS = {
+    "בדקות הקרובות צפויות להתקבל התרעות באזורך": "Pre-alert",
+    "חדירת כלי טיס עוין":                         "Drone alert",
+    "ירי רקטות וטילים":                            "Missile alert",
+}
 
 DATA_DIR    = Path("data")
 OUTPUT_DIR  = Path("output")
@@ -82,29 +87,31 @@ def load_city_data() -> Tuple[dict, dict]:
 
 # ── Alert data loading ────────────────────────────────────────────────────────
 
-def fetch_sheet() -> Optional[pd.DataFrame]:
-    if not SHEETS_ID:
-        return None
-    url = (
-        f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}"
-        f"/export?format=csv&gid={SHEETS_GID}"
-    )
-    print(f"Fetching Google Sheet … ({url})")
+def fetch_github_csv() -> Optional[pd.DataFrame]:
+    print(f"Fetching GitHub CSV … ({GITHUB_CSV_URL})")
     try:
-        resp = requests.get(url, timeout=30, allow_redirects=True)
-        if resp.status_code != 200 or "text/csv" not in resp.headers.get("Content-Type", ""):
-            print(
-                f"  Sheet not publicly accessible (HTTP {resp.status_code}).\n"
-                "  → Export as .xlsx and place in data/"
-            )
-            return None
-        from io import StringIO
-        df = pd.read_csv(StringIO(resp.text), dtype=str)
-        print(f"  Loaded {len(df):,} rows from Google Sheet.")
-        return df
+        resp = requests.get(GITHUB_CSV_URL, timeout=30)
+        resp.raise_for_status()
     except requests.RequestException as exc:
-        print(f"  Could not reach Google Sheet: {exc}")
+        print(f"  Could not reach GitHub CSV: {exc}")
         return None
+
+    from io import StringIO
+    raw = pd.read_csv(StringIO(resp.text), dtype=str)
+
+    # Filter to known categories and cutoff date
+    raw = raw[raw["category_desc"].isin(ALERT_TRANSLATIONS)]
+    raw["_dt"] = pd.to_datetime(raw["alertDate"].str.replace(" ", "T"), errors="coerce")
+    raw = raw[raw["_dt"] >= CUTOFF_DATE].drop(columns=["_dt"])
+
+    # Drop unused columns, rename to match existing normalise logic
+    raw = raw.drop(columns=["matrix_id", "category"], errors="ignore")
+    raw = raw.rename(columns={"data": "location", "alertDate": "alertDateTime"})
+    raw["alert_type"] = raw["category_desc"].map(ALERT_TRANSLATIONS)
+    raw = raw.drop(columns=["category_desc"])
+
+    print(f"  Loaded {len(raw):,} rows from GitHub CSV.")
+    return raw
 
 
 def find_data_file() -> Optional[Path]:
@@ -309,15 +316,21 @@ def compute_mismatches(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
             has_missile = any(pre_dt <= m <= pre_dt + PAIR_WINDOW for m in missile_dts)
             has_drone   = any(pre_dt <= d <= pre_dt + PAIR_WINDOW for d in drone_dts)
             if has_missile:
+                gap = min((m - pre_dt).total_seconds()
+                          for m in missile_dts if pre_dt <= m <= pre_dt + PAIR_WINDOW)
                 evt = "paired_missile"
             elif has_drone:
+                gap = min((d - pre_dt).total_seconds()
+                          for d in drone_dts if pre_dt <= d <= pre_dt + PAIR_WINDOW)
                 evt = "paired_drone"
             else:
+                gap = None
                 evt = "pre_only"
             rows.append({
                 "city": city, "zone": zone, "group": group,
                 "date_str":   pre_dt.strftime("%Y-%m-%d"),
                 "event_type": evt,
+                "gap_seconds": gap,
             })
 
         # Missile alerts: missile_only if no pre-alert preceded within PAIR_WINDOW
@@ -327,6 +340,7 @@ def compute_mismatches(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
                     "city": city, "zone": zone, "group": group,
                     "date_str":   m_dt.strftime("%Y-%m-%d"),
                     "event_type": "missile_only",
+                    "gap_seconds": None,
                 })
 
         # Drone alerts: drone_only if no pre-alert preceded within PAIR_WINDOW
@@ -336,11 +350,12 @@ def compute_mismatches(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
                     "city": city, "zone": zone, "group": group,
                     "date_str":   d_dt.strftime("%Y-%m-%d"),
                     "event_type": "drone_only",
+                    "gap_seconds": None,
                 })
 
     if rows:
         return pd.DataFrame(rows)
-    return pd.DataFrame(columns=["city", "zone", "group", "date_str", "event_type"])
+    return pd.DataFrame(columns=["city", "zone", "group", "date_str", "event_type", "gap_seconds"])
 
 
 ALL_EVENT_TYPES = ("paired_missile", "paired_drone", "pre_only", "missile_only", "drone_only")
@@ -372,7 +387,8 @@ def mismatch_daily_data(mismatch_df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Chart ─────────────────────────────────────────────────────────────────────
 
-def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None) -> None:
+def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None,
+                partial_day: Optional[str] = None, partial_hour: Optional[int] = None) -> None:
     """
     Full-screen interactive chart with three views toggled by a tab bar:
 
@@ -524,6 +540,12 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         ),
         hovermode="x unified",
         margin=dict(t=80, b=60, l=70, r=40),
+        annotations=([dict(
+            x=partial_day, y=1.06, xref="x", yref="paper",
+            text=f"\u26a0 {partial_day}: partial day (data through {partial_hour:02d}:xx)",
+            showarrow=False, font=dict(size=11, color="#ffaa44"),
+            xanchor="center",
+        )] if partial_day else []),
     )
 
     # ── Mismatch records for JS-side chart building ────────────────────────
@@ -538,6 +560,22 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     else:
         mismatch_records_js = "[]"
 
+    # ── Gap-seconds arrays for lead-time histogram ──────────────────────────
+    if mismatch_df is not None and not mismatch_df.empty and "gap_seconds" in mismatch_df.columns:
+        gap_missile_js = json.dumps(
+            mismatch_df[mismatch_df["event_type"] == "paired_missile"][["group", "gap_seconds"]]
+            .dropna().assign(gap_seconds=lambda d: d["gap_seconds"].astype(int))
+            .rename(columns={"gap_seconds": "gap"}).to_dict(orient="records")
+        )
+        gap_drone_js = json.dumps(
+            mismatch_df[mismatch_df["event_type"] == "paired_drone"][["group", "gap_seconds"]]
+            .dropna().assign(gap_seconds=lambda d: d["gap_seconds"].astype(int))
+            .rename(columns={"gap_seconds": "gap"}).to_dict(orient="records")
+        )
+    else:
+        gap_missile_js = "[]"
+        gap_drone_js   = "[]"
+
     # ── Serialise everything for JS ────────────────────────────────────────
     def fig_json(fig):
         d = json.loads(fig.to_json())
@@ -547,19 +585,31 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     date_mini_data_js, date_mini_layout_js = fig_json(date_mini_fig)
     date_data_js,      date_layout_js      = fig_json(date_fig)
 
-    hourly_js      = json.dumps(chart_df.to_dict(orient="records"))
+    hourly_js       = json.dumps(chart_df.to_dict(orient="records"))
     group_colors_js = json.dumps(GROUP_COLORS)
-    groups_js      = json.dumps(groups)
-    alert_types_js = json.dumps(alert_types)
+    groups_js       = json.dumps(groups)
+    alert_types_js  = json.dumps(alert_types)
+    partial_day_js  = json.dumps(partial_day)
+    partial_hour_js = json.dumps(partial_hour)
 
     dark_main  = json.dumps({"plot_bgcolor": "#1a1a2e", "paper_bgcolor": "#0f0f1a",
                               "font.color": "#cccccc", "title.font.color": "#cccccc",
                               "xaxis.color": "#cccccc", "xaxis.gridcolor": "#2a2a3e",
-                              "yaxis.color": "#cccccc", "yaxis.gridcolor": "#2a2a3e"})
+                              "yaxis.color": "#cccccc", "yaxis.gridcolor": "#2a2a3e",
+                              "legend.bgcolor": "rgba(26,26,46,0.85)", "legend.bordercolor": "#444",
+                              "legend.font.color": "#cccccc",
+                              "xaxis.rangeselector.bgcolor": "#252540",
+                              "xaxis.rangeselector.activecolor": "#444470",
+                              "xaxis.rangeselector.font.color": "#cccccc"})
     light_main = json.dumps({"plot_bgcolor": "white",   "paper_bgcolor": "#fafafa",
                               "font.color": "#333",     "title.font.color": "#333",
                               "xaxis.color": "#333",    "xaxis.gridcolor": "#e0e0e0",
-                              "yaxis.color": "#333",    "yaxis.gridcolor": "#e0e0e0"})
+                              "yaxis.color": "#333",    "yaxis.gridcolor": "#e0e0e0",
+                              "legend.bgcolor": "rgba(255,255,255,0.85)", "legend.bordercolor": "#ccc",
+                              "legend.font.color": "#333",
+                              "xaxis.rangeselector.bgcolor": "#e8e8f0",
+                              "xaxis.rangeselector.activecolor": "#c0c0e0",
+                              "xaxis.rangeselector.font.color": "#333"})
     dark_mini  = json.dumps({"plot_bgcolor": "#1a1a2e", "paper_bgcolor": "#0f0f1a",
                               "xaxis.color": "#777",    "yaxis.color": "#777"})
     light_mini = json.dumps({"plot_bgcolor": "white",   "paper_bgcolor": "#fafafa",
@@ -604,10 +654,8 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
     #sep {{ width: 1px; height: 22px; background: #333; margin: 0 4px; flex-shrink:0; }}
     body.light #sep {{ background: #ccc; }}
-    #type-label {{ font-size: 11px; color: #777; white-space: nowrap; }}
-
     /* ── Chart area ── */
-    #view-hour, #view-date, #view-mismatch {{ position: absolute; left:0; right:0; }}
+    #view-hour, #view-date, #view-mismatch, #view-leadtime {{ position: absolute; left:0; right:0; }}
     #view-hour {{
       top: 46px;
       bottom: 180px;   /* room for date slider */
@@ -622,6 +670,12 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       bottom: 0;
       display: none;
     }}
+    #view-leadtime {{
+      top: 46px;
+      bottom: 0;
+      display: none;
+    }}
+    #leadtime-chart {{ width:100%; height:100%; }}
     #main-chart, #date-full-chart {{ width:100%; height:100%; }}
     #mismatch-chart-bar {{ width:100%; height:57%; }}
     #mismatch-chart-cum {{ width:100%; height:43%; }}
@@ -665,6 +719,23 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer;
     }}
     body.light #date-select {{ background: #fff; color: #333; border-color: #bbb; }}
+
+    .tb-sep {{ width:1px; height:22px; background:#333; margin:0 4px; flex-shrink:0; }}
+    body.light .tb-sep {{ background: #ccc; }}
+
+    #date-select-label {{ font-size:12px; color:#aaa; white-space:nowrap; }}
+    body.light #date-select-label {{ color: #555; }}
+
+    #type-label {{ font-size: 11px; color: #777; white-space: nowrap; }}
+    body.light #type-label {{ color: #555; }}
+
+    .tb-region-select {{
+      background: #252540; color: #ccc; border: 1px solid #444;
+      border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer;
+    }}
+    body.light .tb-region-select {{ background: #fff; color: #333; border-color: #bbb; }}
+
+    body.light #modal-close {{ color: #555; }}
   </style>
 </head>
 <body>
@@ -676,19 +747,25 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
     <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
     <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
-    <div id="sep2" style="width:1px;height:22px;background:#333;margin:0 4px;flex-shrink:0;"></div>
-    <label for="date-select" id="date-select-label" style="font-size:12px;color:#aaa;white-space:nowrap;">Date:</label>
+    <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
+    <div id="sep2" class="tb-sep"></div>
+    <label for="date-select" id="date-select-label">Date:</label>
     <select id="date-select" onchange="onDateSelect(this.value)"></select>
-    <div id="sep3" style="width:1px;height:22px;background:#333;margin:0 4px;flex-shrink:0;"></div>
+    <div id="sep3" class="tb-sep"></div>
     <span id="type-label">Alert type:</span>
     <div id="type-btns" style="display:flex;gap:6px;"></div>
     <div id="mismatch-controls" style="display:none;align-items:center;gap:6px;">
-      <div style="width:1px;height:22px;background:#333;margin:0 4px;"></div>
-      <select id="mismatch-region-select" onchange="onMismatchRegion(this.value)"
-              style="background:#252540;color:#ccc;border:1px solid #444;border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer;">
+      <div class="tb-sep"></div>
+      <select id="mismatch-region-select" class="tb-region-select" onchange="onMismatchRegion(this.value)">
         <option value="">All regions</option>
       </select>
       <button class="tb-btn" onclick="toggleMismatchMode()" id="mismatch-mode-btn">%&nbsp;View</button>
+    </div>
+    <div id="leadtime-controls" style="display:none;align-items:center;gap:6px;">
+      <div class="tb-sep"></div>
+      <select id="leadtime-region-select" class="tb-region-select" onchange="onLeadtimeRegion(this.value)">
+        <option value="">All regions</option>
+      </select>
     </div>
   </div>
 
@@ -711,6 +788,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <div id="view-mismatch">
     <div id="mismatch-chart-bar"></div>
     <div id="mismatch-chart-cum"></div>
+  </div>
+
+  <!-- Lead-time histogram view -->
+  <div id="view-leadtime">
+    <div id="leadtime-chart"></div>
   </div>
 
   <!-- Small-multiples modal -->
@@ -739,6 +821,10 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     var dateData            = {date_data_js};
     var dateLayout          = {date_layout_js};
     var allMismatchRecords  = {mismatch_records_js};
+    var gapMissileSeconds   = {gap_missile_js};
+    var gapDroneSeconds     = {gap_drone_js};
+    var partialDay          = {partial_day_js};
+    var partialHour         = {partial_hour_js};
 
     var darkMain    = {dark_main};
     var lightMain   = {light_main};
@@ -820,22 +906,27 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       document.getElementById('view-hour').style.display      = v === 'hour'     ? 'block' : 'none';
       document.getElementById('view-date').style.display      = v === 'date'     ? 'block' : 'none';
       document.getElementById('view-mismatch').style.display  = v === 'mismatch' ? 'block' : 'none';
+      document.getElementById('view-leadtime').style.display  = v === 'leadtime' ? 'block' : 'none';
       document.getElementById('date-mini-wrap').style.display = v === 'hour'     ? 'block' : 'none';
       document.getElementById('btn-hour').classList.toggle('active',     v === 'hour');
       document.getElementById('btn-date').classList.toggle('active',     v === 'date');
       document.getElementById('btn-mismatch').classList.toggle('active', v === 'mismatch');
+      document.getElementById('btn-leadtime').classList.toggle('active', v === 'leadtime');
       document.getElementById('type-label').style.display        = v === 'hour'     ? 'inline' : 'none';
       document.getElementById('type-btns').style.display         = v === 'hour'     ? 'flex'   : 'none';
       document.getElementById('date-select-label').style.display = v === 'hour'     ? 'inline' : 'none';
       document.getElementById('date-select').style.display       = v === 'hour'     ? 'inline' : 'none';
       document.getElementById('sep3').style.display              = v === 'hour'     ? 'block'  : 'none';
-      document.getElementById('mismatch-controls').style.display = v === 'mismatch' ? 'flex'   : 'none';
+      document.getElementById('mismatch-controls').style.display  = v === 'mismatch' ? 'flex'   : 'none';
+      document.getElementById('leadtime-controls').style.display  = v === 'leadtime' ? 'flex'   : 'none';
       // Force Plotly to redraw at the now-correct dimensions
       setTimeout(function() {{
         if (v === 'date') {{ Plotly.Plots.resize('date-full-chart'); }}
         else if (v === 'mismatch') {{
           Plotly.Plots.resize('mismatch-chart-bar');
           Plotly.Plots.resize('mismatch-chart-cum');
+        }} else if (v === 'leadtime') {{
+          Plotly.Plots.resize('leadtime-chart');
         }} else {{
           Plotly.Plots.resize('main-chart');
           Plotly.Plots.resize('date-mini-chart');
@@ -954,6 +1045,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     // ── Mismatch chart ───────────────────────────────────────────────────────
     var mismatchIsPct    = false;
     var mismatchRegion   = '';
+    var leadtimeRegion   = '';
 
     var EVT_ORDER  = ['paired_missile','paired_drone','pre_only','missile_only','drone_only'];
     var EVT_LABELS = {{
@@ -982,6 +1074,24 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       }});
     }})();
     buildMismatchCharts('');
+
+    // Populate leadtime region dropdown once
+    (function() {{
+      var sel = document.getElementById('leadtime-region-select');
+      var regions = [...new Set(
+        gapMissileSeconds.concat(gapDroneSeconds).map(function(r) {{ return r.group; }})
+      )].sort();
+      regions.forEach(function(g) {{
+        var o = document.createElement('option');
+        o.value = g; o.textContent = g;
+        sel.appendChild(o);
+      }});
+    }})();
+
+    function onLeadtimeRegion(val) {{
+      leadtimeRegion = val;
+      buildLeadTimeChart(val);
+    }}
 
     function onMismatchRegion(val) {{
       mismatchRegion = val;
@@ -1013,8 +1123,8 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
       var dates = Object.keys(dateMap).sort();
       var theme = isDark
-        ? {{bg:'#1a1a2e', paper:'#0f0f1a', grid:'#2a2a3e', text:'#cccccc', roll:'#ffffff'}}
-        : {{bg:'white',   paper:'#fafafa', grid:'#e0e0e0', text:'#333333', roll:'#555555'}};
+        ? {{bg:'#1a1a2e', paper:'#0f0f1a', grid:'#2a2a3e', text:'#cccccc', roll:'#ffffff', legendBg:'rgba(26,26,46,0.85)',    legendBorder:'#444'}}
+        : {{bg:'white',   paper:'#fafafa', grid:'#e0e0e0', text:'#333333', roll:'#555555', legendBg:'rgba(255,255,255,0.85)', legendBorder:'#ccc'}};
 
       if (!dates.length) {{
         var empty = {{plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
@@ -1086,12 +1196,18 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         yaxis:{{title:mismatchIsPct?'% of Events':'Event Count',
                 showgrid:true, gridcolor:theme.grid, zeroline:false, color:theme.text}},
         yaxis2:{{title:'Mismatch %', overlaying:'y', side:'right',
-                 showgrid:false, zeroline:false, color:'#aaa', range:[0,100]}},
+                 showgrid:false, zeroline:false, color:theme.text, range:[0,100]}},
         plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
         font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
         legend:{{font:{{size:11,color:theme.text}},
-                 bgcolor:'rgba(26,26,46,0.85)', bordercolor:'#444', borderwidth:1}},
+                 bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
         margin:{{t:70, b:60, l:70, r:70}},
+        annotations: partialDay ? [{{
+          x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
+          text: '\u26a0 ' + partialDay + ': partial day (data to ' + partialHour + ':xx)',
+          showarrow: false, font: {{size: 10, color: '#ffaa44'}},
+          xanchor: 'center',
+        }}] : [],
       }};
 
       // Cumulative traces
@@ -1115,13 +1231,102 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
         font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
         legend:{{font:{{size:11,color:theme.text}},
-                 bgcolor:'rgba(26,26,46,0.85)', bordercolor:'#444', borderwidth:1}},
+                 bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
         margin:{{t:50, b:60, l:70, r:40}},
+        annotations: partialDay ? [{{
+          x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
+          text: '\u26a0 ' + partialDay + ': partial day (data to ' + partialHour + ':xx)',
+          showarrow: false, font: {{size: 10, color: '#ffaa44'}},
+          xanchor: 'center',
+        }}] : [],
       }};
 
       Plotly.react('mismatch-chart-bar', barTraces, barLayout, {{responsive:true}});
       Plotly.react('mismatch-chart-cum', cumTraces, cumLayout, {{responsive:true}});
     }}
+
+    // ── Lead-time histogram ──────────────────────────────────────────────────
+    function buildLeadTimeChart(region) {{
+      var theme = isDark
+        ? {{bg:'#1a1a2e', paper:'#0f0f1a', grid:'#2a2a3e', text:'#cccccc', legendBg:'rgba(26,26,46,0.85)',    legendBorder:'#444'}}
+        : {{bg:'white',   paper:'#fafafa', grid:'#e0e0e0', text:'#333333', legendBg:'rgba(255,255,255,0.85)', legendBorder:'#ccc'}};
+
+      // Filter by region then convert gap seconds → minutes
+      function toMinutes(arr) {{
+        var filtered = region ? arr.filter(function(r) {{ return r.group === region; }}) : arr;
+        return filtered.map(function(r) {{ return parseFloat((r.gap / 60).toFixed(2)); }});
+      }}
+
+      var missileMin = toMinutes(gapMissileSeconds);
+      var droneMin   = toMinutes(gapDroneSeconds);
+
+      var traces = [];
+      if (missileMin.length) {{
+        traces.push({{
+          type: 'histogram',
+          x: missileMin,
+          name: 'Paired (missile)',
+          autobinx: false,
+          xbins: {{start: 0, end: 15, size: 0.5}},
+          marker: {{color: '#2ca02c', opacity: 0.75}},
+          hovertemplate: '<b>Paired (missile)</b><br>%{{x:.1f}}–%{{customdata:.1f}} min: <b>%{{y:,}}</b><extra></extra>',
+          customdata: missileMin.map(function(v) {{ return v + 0.5; }}),
+        }});
+      }}
+      if (droneMin.length) {{
+        traces.push({{
+          type: 'histogram',
+          x: droneMin,
+          name: 'Paired (drone)',
+          autobinx: false,
+          xbins: {{start: 0, end: 15, size: 0.5}},
+          marker: {{color: '#17becf', opacity: 0.75}},
+          hovertemplate: '<b>Paired (drone)</b><br>%{{x:.1f}}–%{{customdata:.1f}} min: <b>%{{y:,}}</b><extra></extra>',
+          customdata: droneMin.map(function(v) {{ return v + 0.5; }}),
+        }});
+      }}
+      if (!traces.length) {{
+        traces = [{{type:'scatter', x:[], y:[], showlegend:false}}];
+      }}
+
+      var nMissile = missileMin.length;
+      var nDrone   = droneMin.length;
+      var regionLabel = region ? ' — ' + region : '';
+      var subtitle = 'Paired events only · 30-second bins · '
+        + nMissile.toLocaleString() + ' missile pairs'
+        + (nDrone ? ', ' + nDrone.toLocaleString() + ' drone pairs' : '');
+
+      var layout = {{
+        barmode: 'overlay',
+        title: {{
+          text: 'Warning Lead Time Distribution' + regionLabel + '<br><sup>' + subtitle + '</sup>',
+          x: 0.5, font: {{size: 15, color: theme.text}},
+        }},
+        xaxis: {{
+          title: 'Minutes from Pre-alert to Paired Alert',
+          range: [0, 15], dtick: 1,
+          showgrid: true, gridcolor: theme.grid,
+          zeroline: false, color: theme.text,
+        }},
+        yaxis: {{
+          title: 'Number of Pre-alerts',
+          showgrid: true, gridcolor: theme.grid,
+          zeroline: false, color: theme.text,
+        }},
+        plot_bgcolor:  theme.bg,
+        paper_bgcolor: theme.paper,
+        font: {{family: 'Arial, Helvetica, sans-serif', color: theme.text}},
+        legend: {{
+          font: {{size: 11, color: theme.text}},
+          bgcolor: theme.legendBg, bordercolor: theme.legendBorder, borderwidth: 1,
+        }},
+        margin: {{t: 80, b: 60, l: 70, r: 40}},
+      }};
+
+      Plotly.react('leadtime-chart', traces, layout, {{responsive: true}});
+    }}
+
+    buildLeadTimeChart('');
 
     // ── Dark / light toggle ─────────────────────────────────────────────────
     function toggleTheme() {{
@@ -1133,6 +1338,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       Plotly.relayout('date-mini-chart', isDark ? darkMini : lightMini);
       Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
       buildMismatchCharts(mismatchRegion);
+      buildLeadTimeChart(leadtimeRegion);
       document.getElementById('date-mini-wrap').style.background =
         isDark ? '#0f0f1a' : '#fafafa';
     }}
@@ -1141,7 +1347,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 </html>"""
 
     OUTPUT_DIR.mkdir(exist_ok=True)
-    outfile = OUTPUT_DIR / "night_alerts.html"
+    outfile = OUTPUT_DIR / "ira_alerts.html"
     outfile.write_text(html, encoding="utf-8")
     print(f"\nChart saved → {outfile}")
 
@@ -1171,12 +1377,26 @@ def main() -> None:
     # 1. City → zone mapping
     city_to_zone, _ = load_city_data()
 
-    # 2. Alert data — local file only
-    data_file = find_data_file()
-    if data_file is None:
-        print("\nNo data found.\nPlace an .xlsx, .xls, or .csv export in data/")
-        sys.exit(1)
-    df = load_alerts(data_file)
+    # 2. Alert data — GitHub CSV first, local file as fallback
+    raw = fetch_github_csv()
+    if raw is not None:
+        df = _normalise_df(raw)
+    else:
+        data_file = find_data_file()
+        if data_file is None:
+            print("\nNo data found. Place an .xlsx/.csv in data/ or check network.")
+            sys.exit(1)
+        df = load_alerts(data_file)
+
+    # 2b. Detect partial day: if the latest date in the data is today, the day isn't over.
+    #     Use current clock time for the "through hour" annotation, not the last alert time.
+    last_date   = df["date_str"].dropna().max()
+    today_str   = date.today().isoformat()
+    is_partial  = last_date == today_str
+    partial_day = last_date if is_partial else None
+    partial_hour = datetime.now().hour if is_partial else None
+    if partial_day:
+        print(f"  Partial day detected: {partial_day} — fetched at hour {partial_hour:02d}:xx")
 
     # 3. Aggregate (with deduplication)
     print("\nAggregating alerts by zone …")
@@ -1205,8 +1425,8 @@ def main() -> None:
         print(f"  Saved → {xlsx_path}")
 
     # 6. Chart
-    build_chart(chart_df, mismatch_df)
-    print("\nDone.  Open output/night_alerts.html in your browser.")
+    build_chart(chart_df, mismatch_df, partial_day=partial_day, partial_hour=partial_hour)
+    print("\nDone.  Open output/ira_alerts.html in your browser.")
 
 
 if __name__ == "__main__":

@@ -2,18 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "Generate Chart",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["main.py"],
-      "port": null,
-      "autoPort": true
-    },
-    {
       "name": "Serve Output",
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8080"],
       "cwd": "output",
-      "port": 8080
+      "port": 8080,
+      "url": "http://localhost:8080/ira_alerts.html"
     }
   ]
 }

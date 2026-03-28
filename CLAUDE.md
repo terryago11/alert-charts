@@ -4,7 +4,7 @@
 
 Fetches Israeli Homefront Command (IDF/oref.org.il) alert history, maps each
 alert city to its official HFC zone, and generates a self-contained interactive
-HTML dashboard at `output/night_alerts.html`.
+HTML dashboard at `output/ira_alerts.html`.
 
 ## Stack
 
@@ -20,7 +20,7 @@ HTML dashboard at `output/night_alerts.html`.
 ```bash
 pip install -r requirements.txt
 python main.py
-open output/night_alerts.html
+open output/ira_alerts.html
 ```
 
 ## Data sources
@@ -68,7 +68,7 @@ the same zone fire at the same minute, that counts as **one event**.
 | `regions.py` | `ZONE_GROUP`, `GROUP_COLORS`, `NIGHT_START`/`NIGHT_END` constants |
 | `data/cities.json` | City → zone mapping from pikud-haoref-api (not committed) |
 | `data/city_region_mapping.csv` | Pre-computed city → zone → region export |
-| `output/night_alerts.html` | Generated dashboard (not committed) |
+| `output/ira_alerts.html` | Generated dashboard (not committed) |
 
 ## Dashboard tabs
 
