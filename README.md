@@ -24,6 +24,17 @@ Stacked bar chart showing, for each calendar day, how many events were:
 
 Toggle between absolute counts and percentage (ratio) view.
 
+### Lead Time
+Histogram of the gap (in minutes) between a pre-alert and its paired missile alert.
+Filter by region to compare warning times across the country.
+
+### Salvos
+Heatmap showing salvo intensity by region and day. A **salvo** is a cluster of 2 or more missile alerts to the same zone where the gap between consecutive alerts is ≤ 30 minutes.
+
+- Color encodes intensity — toggle between **salvo cluster count** and **total missiles in salvos**
+- Filter by **region**, **date range**, and **minimum salvo size** (slider) to focus on the heaviest attacks
+- The heatmap immediately reveals which regions experience sustained repeated fire and when
+
 ## Alert types
 
 | Type | Description |

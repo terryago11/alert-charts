@@ -60,6 +60,13 @@ the same zone fire at the same minute, that counts as **one event**.
 - A `Missile alert` is `missile_only` if no pre-alert preceded it within 15 min
 - Drone alerts are excluded from pairing
 
+### Salvo analysis
+`compute_salvos()` finds clusters of repeated `Missile alert` events to the same zone:
+- A **salvo cluster** = 2+ missile alerts to the same zone where the gap between every consecutive pair ≤ `SALVO_WINDOW` (30 min)
+- Same-minute hits to the same zone are deduplicated before clustering (consistent with `aggregate()`)
+- Output: one row per cluster with `zone`, `group`, `date_str`, `cluster_start` (ISO string), `cluster_size` (missile count)
+- Individual cluster records are serialised to JS; all aggregation (group-by-date, filtering) happens client-side
+
 ## File map
 
 | File | Purpose |
@@ -75,6 +82,8 @@ the same zone fire at the same minute, that counts as **one event**.
 1. **By Hour** — stacked bar, X=hour 0–23, Y=alert count; date-range slider + alert-type toggles
 2. **By Date** — cumulative line chart per region; range selector buttons
 3. **Mismatches** — stacked bar per day: paired / pre-alert only / missile only; toggle Abs / % view
+4. **Lead Time** — histogram of pre-alert → missile gap (seconds); region filter
+5. **Salvos** — heatmap (region × day), color = salvo intensity; filters: region, date range, min cluster size; toggle cluster count / total missiles
 
 ## Conventions
 
@@ -82,3 +91,7 @@ the same zone fire at the same minute, that counts as **one event**.
 - All theme (dark/light) logic lives in the inline JavaScript in `build_chart()`
 - Adding a new chart view: add a tab button + view div in the HTML template,
   initialise a Plotly chart, and handle it in `setView()` and `toggleTheme()`
+- Charts rendered into hidden `display:none` views (Lead Time, Salvos) must call their
+  build function from `setView()` rather than relying on `Plotly.Plots.resize()`, because
+  Plotly skips rendering into zero-size elements. Both also pass explicit `height`/`width`
+  from `offsetHeight`/`offsetWidth` to fill the window correctly.
