@@ -698,6 +698,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <title>IDF Alert Activity</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='2' y='18' width='6' height='12' fill='%234e79a7'/><rect x='10' y='10' width='6' height='20' fill='%23f28e2b'/><rect x='18' y='4' width='6' height='26' fill='%23e15759'/><rect x='26' y='13' width='6' height='17' fill='%2376b7b2'/></svg>">
   <style>
+    :root {{ --tb-h: 46px; --mini-h: 180px; }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     html, body {{
       width: 100%; height: 100%; overflow: hidden;
@@ -708,11 +709,13 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
     /* ── Top bar ── */
     #topbar {{
-      position: fixed; top: 0; left: 0; right: 0; height: 46px; z-index: 100;
+      position: fixed; top: 0; left: 0; right: 0; height: var(--tb-h); z-index: 100;
       display: flex; align-items: center; gap: 10px; padding: 0 16px;
       background: rgba(10,10,28,0.92); backdrop-filter: blur(6px);
       border-bottom: 1px solid #2a2a3e;
     }}
+    #nav-tabs {{ display: flex; align-items: center; gap: 10px; }}
+    #hamburger-btn {{ display: none; align-items: center; gap: 5px; }}
     body.light #topbar {{
       background: rgba(245,245,252,0.95); border-color: #ddd;
     }}
@@ -733,26 +736,26 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     /* ── Chart area ── */
     #view-hour, #view-date, #view-mismatch, #view-leadtime, #view-salvos {{ position: absolute; left:0; right:0; }}
     #view-hour {{
-      top: 46px;
-      bottom: 180px;   /* room for date slider */
+      top: var(--tb-h);
+      bottom: var(--mini-h);   /* room for date slider */
     }}
     #view-date {{
-      top: 46px;
+      top: var(--tb-h);
       bottom: 0;
       display: none;
     }}
     #view-mismatch {{
-      top: 46px;
+      top: var(--tb-h);
       bottom: 0;
       display: none;
     }}
     #view-leadtime {{
-      top: 46px;
+      top: var(--tb-h);
       bottom: 0;
       display: none;
     }}
     #view-salvos {{
-      top: 46px;
+      top: var(--tb-h);
       bottom: 0;
       display: none;
     }}
@@ -763,7 +766,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     #mismatch-chart-cum {{ width:100%; height:43%; }}
     #date-mini-wrap {{
       position: fixed; bottom: 0; left: 0; right: 0;
-      height: 180px; z-index: 50;
+      height: var(--mini-h); z-index: 50;
       background: #0f0f1a;
       border-top: 1px solid #2a2a3e;
     }}
@@ -818,6 +821,66 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     body.light .tb-region-select {{ background: #fff; color: #333; border-color: #bbb; }}
 
     body.light #modal-close {{ color: #555; }}
+
+    /* ── Mobile ── */
+    @media (max-width: 768px) {{
+      :root {{ --mini-h: 130px; }}
+
+      #topbar {{
+        height: auto;
+        flex-wrap: wrap;
+        padding: 6px 10px;
+        row-gap: 5px;
+      }}
+
+      /* Hamburger visible; nav tabs become a fixed dropdown */
+      #hamburger-btn {{ display: inline-flex; }}
+      #nav-tabs {{
+        display: none;
+        position: fixed;
+        top: var(--tb-h);
+        left: 0; right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        padding: 8px 12px;
+        background: rgba(10,10,28,0.97);
+        border-bottom: 1px solid #2a2a3e;
+        z-index: 200;
+        backdrop-filter: blur(6px);
+      }}
+      body.light #nav-tabs {{
+        background: rgba(245,245,252,0.97);
+        border-color: #ddd;
+      }}
+      #nav-tabs.open {{ display: flex; }}
+      #nav-tabs .tb-btn {{
+        text-align: left; padding: 9px 14px;
+        font-size: 13px; border-radius: 8px;
+      }}
+      #nav-tabs > #sep {{ display: none; }}
+
+      /* Hide desktop-only separators */
+      #sep {{ display: none; }}
+      #sep2 {{ display: none !important; }}
+
+      .tb-btn {{ padding: 5px 8px; font-size: 11px; }}
+
+      #date-select, .tb-region-select {{
+        max-width: 110px;
+        font-size: 11px;
+      }}
+
+      #salvos-controls, #mismatch-controls, #leadtime-controls, #type-btns {{
+        flex-wrap: wrap;
+        row-gap: 4px;
+      }}
+
+      #salvos-controls input[type=range] {{ width: 55px; }}
+
+      #modal {{ width: 98vw; max-height: 92vh; }}
+      #modal-body {{ padding: 6px; }}
+    }}
   </style>
 </head>
 <body>
@@ -825,12 +888,15 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <!-- Top bar -->
   <div id="topbar">
     <button class="tb-btn" onclick="toggleTheme()" id="theme-btn">&#9728;&#65039;&nbsp;Light</button>
-    <div id="sep"></div>
-    <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
-    <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
-    <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
-    <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
-    <button class="tb-btn"        onclick="setView('salvos')"  id="btn-salvos">&#128165;&nbsp;Salvos</button>
+    <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()">&#9776;&nbsp;<span id="hamburger-label">By Hour</span></button>
+    <div id="nav-tabs">
+      <div id="sep"></div>
+      <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
+      <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
+      <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
+      <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
+      <button class="tb-btn"        onclick="setView('salvos')"  id="btn-salvos">&#128165;&nbsp;Salvos</button>
+    </div>
     <div id="sep2" class="tb-sep"></div>
     <label for="date-select" id="date-select-label">Date:</label>
     <select id="date-select" onchange="onDateSelect(this.value)"></select>
@@ -940,6 +1006,40 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     var darkMini    = {dark_mini};
     var lightMini   = {light_mini};
 
+    // ── Mobile helpers ───────────────────────────────────────────────────────
+    function isMobile() {{ return window.innerWidth < 768; }}
+
+    function syncTopbarHeight() {{
+      var h = document.getElementById('topbar').offsetHeight;
+      document.documentElement.style.setProperty('--tb-h', h + 'px');
+    }}
+    window.addEventListener('resize', syncTopbarHeight);
+
+    function chartMargins(desktopMargin, mobileMargin) {{
+      return isMobile() ? mobileMargin : desktopMargin;
+    }}
+
+    var VIEW_LABELS = {{
+      hour: 'By Hour', date: 'By Date', mismatch: 'Mismatches',
+      leadtime: 'Lead Time', salvos: 'Salvos'
+    }};
+
+    function toggleNavDrawer() {{
+      document.getElementById('nav-tabs').classList.toggle('open');
+      syncTopbarHeight();
+    }}
+
+    // Close drawer when clicking outside
+    document.addEventListener('click', function(e) {{
+      var drawer = document.getElementById('nav-tabs');
+      var btn    = document.getElementById('hamburger-btn');
+      if (drawer.classList.contains('open') &&
+          !drawer.contains(e.target) && !btn.contains(e.target)) {{
+        drawer.classList.remove('open');
+        syncTopbarHeight();
+      }}
+    }});
+
     // ── State ───────────────────────────────────────────────────────────────
     var isDark            = true;
     var currentView       = 'hour';
@@ -951,10 +1051,61 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     var salvosDateTo      = '';
     var salvosMinSize     = 2;
 
+    // ── Mobile layout patches (mutate before first plot) ─────────────────────
+    if (isMobile()) {{
+      hourLayout.xaxis = Object.assign({{}}, hourLayout.xaxis, {{
+        tickvals: [0, 4, 8, 12, 16, 20, 23],
+        ticktext: ['0h', '4h', '8h', '12h', '16h', '20h', '23h'],
+      }});
+      hourLayout.margin = {{t: 45, b: 110, l: 45, r: 10}};
+      hourLayout.legend = Object.assign({{}}, hourLayout.legend, {{
+        orientation: 'h', x: 0.5, xanchor: 'center',
+        y: -0.1, yanchor: 'top',
+        font: {{size: 9, color: '#cccccc'}},
+      }});
+      hourLayout.title = Object.assign({{}}, hourLayout.title, {{
+        font: {{size: 12, color: '#cccccc'}},
+      }});
+
+      miniLayout.margin = {{t: 4, b: 10, l: 45, r: 10}};
+
+      // Date chart: shorten title (avoid rangeselector overlap), move annotation inside
+      dateLayout.margin = {{t: 55, b: 110, l: 45, r: 10}};
+      dateLayout.title  = Object.assign({{}}, dateLayout.title, {{
+        text: 'Cumulative Alerts by Region',
+        font: {{size: 13, color: '#cccccc'}},
+      }});
+      // Move partial-day annotation inside plot area (top-right)
+      if (dateLayout.annotations && dateLayout.annotations.length) {{
+        dateLayout.annotations = dateLayout.annotations.map(function(a) {{
+          return Object.assign({{}}, a, {{
+            xref: 'paper', x: 0.99, xanchor: 'right',
+            y: 0.98, yanchor: 'top', yref: 'paper',
+            font: {{size: 9, color: '#ffaa44'}},
+          }});
+        }});
+      }}
+      // Tight x-axis range (no Plotly 5% padding at right edge)
+      var _allDates = [];
+      dateData.forEach(function(t) {{ if (t.x) _allDates = _allDates.concat(t.x); }});
+      _allDates.sort();
+      if (_allDates.length > 1) {{
+        dateLayout.xaxis = Object.assign({{}}, dateLayout.xaxis, {{
+          range: [_allDates[0], _allDates[_allDates.length - 1]],
+        }});
+      }}
+      dateLayout.legend = Object.assign({{}}, dateLayout.legend, {{
+        orientation: 'h', x: 0.5, xanchor: 'center',
+        y: -0.1, yanchor: 'top',
+        font: {{size: 9, color: '#cccccc'}},
+      }});
+    }}
+
     // ── Init ─────────────────────────────────────────────────────────────────
     Plotly.newPlot('main-chart',      hourData, hourLayout, {{responsive:true}});
     Plotly.newPlot('date-mini-chart', miniData, miniLayout, {{responsive:true}});
     Plotly.newPlot('date-full-chart', dateData, dateLayout, {{responsive:true}});
+    syncTopbarHeight();
 
     // ── Populate date selector ───────────────────────────────────────────────
     (function() {{
@@ -1036,6 +1187,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       document.getElementById('mismatch-controls').style.display  = v === 'mismatch' ? 'flex'   : 'none';
       document.getElementById('leadtime-controls').style.display  = v === 'leadtime' ? 'flex'   : 'none';
       document.getElementById('salvos-controls').style.display    = v === 'salvos'   ? 'flex'   : 'none';
+      // Close hamburger drawer and update its label
+      document.getElementById('nav-tabs').classList.remove('open');
+      var hamburgerLabel = document.getElementById('hamburger-label');
+      if (hamburgerLabel) {{ hamburgerLabel.textContent = VIEW_LABELS[v] || v; }}
+      syncTopbarHeight();
       // Force Plotly to redraw at the now-correct dimensions
       setTimeout(function() {{
         if (v === 'date') {{ Plotly.Plots.resize('date-full-chart'); }}
@@ -1106,13 +1262,15 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
       var color = groupColors[group] || '#888';
       var days  = [...new Set(rows.map(function(r) {{ return r.date_str; }}))].sort();
-      var COLS  = 7, ROWS = Math.ceil(days.length / COLS);
+      var COLS  = window.innerWidth < 500 ? 2 : (window.innerWidth < 900 ? 4 : 7);
+      var ROWS  = Math.ceil(days.length / COLS);
+      var cellH = window.innerWidth < 500 ? 100 : 140;
 
       var traces = [], layout = {{
         grid: {{ rows: ROWS, columns: COLS, pattern: 'independent', ygap: 0.18, xgap: 0.08 }},
         showlegend: false,
         margin: {{ t: 30, b: 10, l: 30, r: 10 }},
-        height: ROWS * 140 + 40,
+        height: ROWS * cellH + 40,
         paper_bgcolor: isDark ? '#12122a' : '#fff',
         plot_bgcolor:  isDark ? '#1a1a2e' : 'white',
         font: {{ color: isDark ? '#ccc' : '#333', size: 10, family: 'Arial' }},
@@ -1345,8 +1503,23 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var barLayout = {{
         barmode:'stack',
         title:{{text:'Mismatch by Day'+regionLabel+'<br><sup>15-min pairing · 7-day mismatch % (dotted) on right axis</sup>',
-                x:0.5, font:{{size:14,color:theme.text}}}},
-        xaxis:{{showgrid:true, gridcolor:theme.grid, color:theme.text, zeroline:false,
+                x:0.5, font:{{size:isMobile()?11:14,color:theme.text}}}},
+        yaxis:{{title:mismatchIsPct?'% of Events':'Event Count',
+                showgrid:true, gridcolor:theme.grid, zeroline:false, color:theme.text}},
+        yaxis2:{{title:'Mismatch %', overlaying:'y', side:'right',
+                 showgrid:false, zeroline:false, color:theme.text, range:[0,100]}},
+        plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
+        font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
+        legend: isMobile()
+          ? {{orientation:'h', x:0.5, xanchor:'center', y:-0.1, yanchor:'top',
+              font:{{size:9,color:theme.text}}, bgcolor:theme.legendBg,
+              bordercolor:theme.legendBorder, borderwidth:1}}
+          : {{font:{{size:11,color:theme.text}},
+              bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
+        margin: isMobile()
+          ? {{t:55, b:110, l:45, r:45}}
+          : {{t:70, b:60,  l:70, r:70}},
+        xaxis: Object.assign({{showgrid:true, gridcolor:theme.grid, color:theme.text, zeroline:false,
                 rangeslider:{{visible:true, thickness:0.05}},
                 rangeselector:{{
                   buttons:[
@@ -1356,21 +1529,15 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
                   ],
                   bgcolor:'#252540', activecolor:'#444470', font:{{color:'#cccccc'}},
                 }}}},
-        yaxis:{{title:mismatchIsPct?'% of Events':'Event Count',
-                showgrid:true, gridcolor:theme.grid, zeroline:false, color:theme.text}},
-        yaxis2:{{title:'Mismatch %', overlaying:'y', side:'right',
-                 showgrid:false, zeroline:false, color:theme.text, range:[0,100]}},
-        plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
-        font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
-        legend:{{font:{{size:11,color:theme.text}},
-                 bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
-        margin:{{t:70, b:60, l:70, r:70}},
-        annotations: partialDay ? [{{
-          x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
-          text: '\u26a0 ' + partialDay + ': partial day (data to ' + partialHour + ':xx)',
-          showarrow: false, font: {{size: 10, color: '#ffaa44'}},
-          xanchor: 'center',
-        }}] : [],
+          isMobile() ? {{range:[dates[0],dates[dates.length-1]]}} : {{}}),
+        annotations: partialDay ? [isMobile()
+          ? {{xref:'paper', yref:'paper', x:0.99, xanchor:'right', y:0.98, yanchor:'top',
+              text:'\u26a0 partial: '+partialDay,
+              showarrow:false, font:{{size:9, color:'#ffaa44'}}}}
+          : {{x:partialDay, y:1.06, xref:'x', yref:'paper',
+              text:'\u26a0 '+partialDay+': partial day (data to '+partialHour+':xx)',
+              showarrow:false, font:{{size:10, color:'#ffaa44'}}, xanchor:'center'}}
+        ] : [],
       }};
 
       // Cumulative traces
@@ -1386,17 +1553,21 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       }});
       var cumLayout = {{
         title:{{text:'Cumulative'+regionLabel, x:0.5, font:{{size:14,color:theme.text}}}},
-        xaxis:{{showgrid:true, gridcolor:theme.grid, color:theme.text, zeroline:false,
+        xaxis: Object.assign({{showgrid:true, gridcolor:theme.grid, color:theme.text, zeroline:false,
                 rangeslider:{{visible:true, thickness:0.05}}}},
+          isMobile() ? {{range:[dates[0],dates[dates.length-1]]}} : {{}}),
         yaxis:{{title:'Cumulative Events', showgrid:true, gridcolor:theme.grid,
                 zeroline:false, color:theme.text}},
         hovermode:'x unified',
+        showlegend: !isMobile(),   /* legend already shown on bar chart above */
         plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
         font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
         legend:{{font:{{size:11,color:theme.text}},
                  bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
-        margin:{{t:50, b:60, l:70, r:40}},
-        annotations: partialDay ? [{{
+        margin: isMobile()
+          ? {{t:30, b:20, l:45, r:10}}
+          : {{t:50, b:60, l:70, r:40}},
+        annotations: (partialDay && !isMobile()) ? [{{
           x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
           text: '\u26a0 ' + partialDay + ': partial day (data to ' + partialHour + ':xx)',
           showarrow: false, font: {{size: 10, color: '#ffaa44'}},
@@ -1469,14 +1640,14 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         width:  viewW,
         title: {{
           text: 'Warning Lead Time Distribution' + regionLabel + '<br><sup>' + subtitle + '</sup>',
-          x: 0.5, font: {{size: 15, color: theme.text}},
+          x: 0.5, font: {{size: isMobile() ? 12 : 15, color: theme.text}},
         }},
-        xaxis: {{
+        xaxis: Object.assign({{
           title: 'Minutes from Pre-alert to Paired Alert',
-          range: [0, 15], dtick: 1,
+          dtick: 1,
           showgrid: true, gridcolor: theme.grid,
           zeroline: false, color: theme.text,
-        }},
+        }}, isMobile() ? {{}} : {{range: [0, 15]}}),
         yaxis: {{
           title: 'Number of Pre-alerts',
           showgrid: true, gridcolor: theme.grid,
@@ -1485,11 +1656,13 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         plot_bgcolor:  theme.bg,
         paper_bgcolor: theme.paper,
         font: {{family: 'Arial, Helvetica, sans-serif', color: theme.text}},
-        legend: {{
-          font: {{size: 11, color: theme.text}},
-          bgcolor: theme.legendBg, bordercolor: theme.legendBorder, borderwidth: 1,
-        }},
-        margin: {{t: 80, b: 60, l: 70, r: 40}},
+        legend: isMobile()
+          ? {{orientation:'h', x:0.5, xanchor:'center', y:-0.1, yanchor:'top',
+              font:{{size:9, color:theme.text}},
+              bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}}
+          : {{font:{{size:11, color:theme.text}},
+              bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
+        margin: chartMargins({{t:80,b:60,l:70,r:40}}, {{t:40,b:80,l:45,r:15}}),
       }};
 
       Plotly.react('leadtime-chart', traces, layout, {{responsive: true}});
@@ -1608,7 +1781,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           text: 'Salvo Intensity by Region & Day' +
                 '<br><sup>Color = ' + yLabel +
                 ' \u00b7 salvo = 2+ missile alerts, gap \u226430 min' + sizeNote + '</sup>',
-          x: 0.5, font: {{size: 14, color: textColor}},
+          x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
           type: 'category',
@@ -1619,14 +1792,14 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         }},
         yaxis: {{
           automargin: true,
-          tickfont: {{size: 11, color: textColor}},
+          tickfont: {{size: isMobile() ? 9 : 11, color: textColor}},
           color: textColor,
           showgrid: false,
         }},
         plot_bgcolor:  paperBg,
         paper_bgcolor: paperBg,
         font: {{family: 'Arial, Helvetica, sans-serif', color: textColor}},
-        margin: {{t: 80, b: 90, l: 145, r: 80}},
+        margin: chartMargins({{t:80,b:90,l:145,r:80}}, {{t:40,b:55,l:80,r:20}}),
         annotations: annotations,
       }};
 
