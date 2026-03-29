@@ -1594,29 +1594,53 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var missileMin = toMinutes(gapMissileSeconds);
       var droneMin   = toMinutes(gapDroneSeconds);
 
+      // Pre-aggregate into explicit bins so hovertemplate can show exact edges.
+      // Plotly histogram %{{x}} gives the bin centre, not the left edge, making
+      // "start–end" range tooltips unreliable; a bar trace avoids that ambiguity.
+      var BIN_START = 0, BIN_END = 15, BIN_SIZE = 0.5;
+      function makeBins(vals) {{
+        var nBins = Math.round((BIN_END - BIN_START) / BIN_SIZE);
+        var counts = new Array(nBins).fill(0);
+        vals.forEach(function(v) {{
+          var idx = Math.floor((v - BIN_START) / BIN_SIZE);
+          if (idx >= 0 && idx < nBins) counts[idx]++;
+        }});
+        var xs = [], ends = [], ys = [];
+        for (var i = 0; i < nBins; i++) {{
+          xs.push(parseFloat((BIN_START + i * BIN_SIZE).toFixed(1)));
+          ends.push(parseFloat((BIN_START + (i + 1) * BIN_SIZE).toFixed(1)));
+          ys.push(counts[i]);
+        }}
+        return {{x: xs, customdata: ends, y: ys}};
+      }}
+
       var traces = [];
       if (missileMin.length) {{
+        var mb = makeBins(missileMin);
         traces.push({{
-          type: 'histogram',
-          x: missileMin,
+          type: 'bar',
+          x: mb.x,
+          y: mb.y,
+          customdata: mb.customdata,
           name: 'Paired (missile)',
-          autobinx: false,
-          xbins: {{start: 0, end: 15, size: 0.5}},
+          width: BIN_SIZE,
+          offset: 0,
           marker: {{color: '#2ca02c', opacity: 0.75}},
           hovertemplate: '<b>Paired (missile)</b><br>%{{x:.1f}}–%{{customdata:.1f}} min: <b>%{{y:,}}</b><extra></extra>',
-          customdata: missileMin.map(function(v) {{ return v + 0.5; }}),
         }});
       }}
       if (droneMin.length) {{
+        var db = makeBins(droneMin);
         traces.push({{
-          type: 'histogram',
-          x: droneMin,
+          type: 'bar',
+          x: db.x,
+          y: db.y,
+          customdata: db.customdata,
           name: 'Paired (drone)',
-          autobinx: false,
-          xbins: {{start: 0, end: 15, size: 0.5}},
+          width: BIN_SIZE,
+          offset: 0,
           marker: {{color: '#17becf', opacity: 0.75}},
           hovertemplate: '<b>Paired (drone)</b><br>%{{x:.1f}}–%{{customdata:.1f}} min: <b>%{{y:,}}</b><extra></extra>',
-          customdata: droneMin.map(function(v) {{ return v + 0.5; }}),
         }});
       }}
       if (!traces.length) {{
