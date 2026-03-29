@@ -696,6 +696,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IDF Alert Activity</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='2' y='18' width='6' height='12' fill='%234e79a7'/><rect x='10' y='10' width='6' height='20' fill='%23f28e2b'/><rect x='18' y='4' width='6' height='26' fill='%23e15759'/><rect x='26' y='13' width='6' height='17' fill='%2376b7b2'/></svg>">
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     html, body {{
