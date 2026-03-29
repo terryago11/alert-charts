@@ -912,7 +912,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     </div>
   </div>
 
-  <script src="plotly.min.js" charset="utf-8"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <script>
     // ── Data ────────────────────────────────────────────────────────────────
     var hourlyData   = {hourly_js};
