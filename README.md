@@ -1,6 +1,10 @@
-# Ira-alert — IDF Homefront Command Alert Dashboard
+# Roaring Lion - Homefront Command Alert Dashboard
 
-An interactive dashboard for analysing Israeli Homefront Command (oref.org.il) alert history — rockets, drones, and pre-warnings — by time of day, region, and pre-alert / missile pairing.
+## About
+
+An open-source interactive dashboard for analysing Israeli Homefront Command (oref.org.il) alert history during Operation Roaring Lion. Tracks rocket, drone, and pre-warning alerts across all HFC zones — visualising patterns by time of day, region, salvo intensity, and pre-alert effectiveness.
+
+Data is fetched automatically from a public archive and refreshed daily. No server required — the output is a single self-contained HTML file.
 
 ## What it shows
 
