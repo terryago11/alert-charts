@@ -1652,7 +1652,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 </html>"""
 
     OUTPUT_DIR.mkdir(exist_ok=True)
-    outfile = OUTPUT_DIR / "ira_alerts.html"
+    outfile = OUTPUT_DIR / "index.html"
     outfile.write_text(html, encoding="utf-8")
     print(f"\nChart saved → {outfile}")
 
@@ -1742,7 +1742,7 @@ def main() -> None:
     # 6. Chart
     build_chart(chart_df, mismatch_df, salvo_df=salvo_df,
                 partial_day=partial_day, partial_hour=partial_hour)
-    print("\nDone.  Open output/ira_alerts.html in your browser.")
+    print("\nDone.  Open output/index.html in your browser.")
 
 
 if __name__ == "__main__":

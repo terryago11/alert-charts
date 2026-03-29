@@ -57,7 +57,7 @@ pip install -r requirements.txt
 python main.py
 
 # Open the dashboard
-open output/ira_alerts.html
+open output/index.html
 ```
 
 ## Data sources
