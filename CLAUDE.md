@@ -65,25 +65,35 @@ the same zone fire at the same minute, that counts as **one event**.
 - A **salvo cluster** = 2+ missile alerts to the same zone where the gap between every consecutive pair ≤ `SALVO_WINDOW` (30 min)
 - Same-minute hits to the same zone are deduplicated before clustering (consistent with `aggregate()`)
 - Output: one row per cluster with `zone`, `group`, `date_str`, `cluster_start` (ISO string), `cluster_size` (missile count)
-- Individual cluster records are serialised to JS; all aggregation (group-by-date, filtering) happens client-side
+- All four columns (including `cluster_start`) are serialised to JS; the chart groups by `(date_str, hour)` client-side to produce one line per day on a 24-hour X axis
+
+### Situation Room
+`compute_situation(chart_df)` computes time-bounded summaries for the Situation Room tab:
+- **Last night**: 22:00 yesterday → 06:00 today (uses `NIGHT_START`/`NIGHT_END`)
+- **Today**: 06:00 today → now
+- For each period: totals by alert type, list of affected regions, per-region 24-element hourly count array
+- Called fresh on every run (not cached in `processed.json`) since it depends on `datetime.now()`
+- `build_chart.py` also calls it after loading `chart_df` from `processed.json`
 
 ## File map
 
 | File | Purpose |
 |------|---------|
 | `main.py` | Entry point; all data loading, aggregation, mismatch analysis, chart HTML |
+| `build_chart.py` | Fast style-only rebuild from `data/processed.json` (no network) |
 | `regions.py` | `ZONE_GROUP`, `GROUP_COLORS`, `NIGHT_START`/`NIGHT_END` constants |
 | `data/cities.json` | City → zone mapping from pikud-haoref-api (not committed) |
 | `data/city_region_mapping.csv` | Pre-computed city → zone → region export |
-| `output/ira_alerts.html` | Generated dashboard (not committed) |
+| `output/index.html` | Generated dashboard (not committed) |
 
 ## Dashboard tabs
 
-1. **By Hour** — stacked bar, X=hour 0–23, Y=alert count; date-range slider + alert-type toggles
-2. **By Date** — cumulative line chart per region; range selector buttons
-3. **Mismatches** — stacked bar per day: paired / pre-alert only / missile only; toggle Abs / % view
-4. **Lead Time** — histogram of pre-alert → missile gap (seconds); region filter
-5. **Salvos** — heatmap (region × day), color = salvo intensity; filters: region, date range, min cluster size; toggle cluster count / total missiles
+1. **Situation Room** *(default)* — verbal + sparkline summary of last night and today; built by `compute_situation()` + `buildSituationView()` JS
+2. **By Hour** — stacked bar, X=hour 0–23, Y=alert count; date-range slider + alert-type toggles
+3. **By Date** — cumulative line chart per region; range selector buttons
+4. **Mismatches** — stacked bar per day: paired / pre-alert only / missile only; toggle Abs / % view
+5. **Lead Time** — histogram of pre-alert → missile gap (seconds); region filter
+6. **Salvos** — overlaid line chart, one line per day; X=hour 0–23, Y=total missile count per hour (flat, non-cumulative); filters: region, date range
 
 ## Conventions
 
@@ -95,3 +105,8 @@ the same zone fire at the same minute, that counts as **one event**.
   build function from `setView()` rather than relying on `Plotly.Plots.resize()`, because
   Plotly skips rendering into zero-size elements. Both also pass explicit `height`/`width`
   from `offsetHeight`/`offsetWidth` to fill the window correctly.
+- Nav tab style: `#nav-tabs .tb-btn` overrides the base `.tb-btn` pill style with browser-tab
+  appearance (transparent background, 2px bottom-border highlight on active). The hamburger
+  and theme-toggle buttons are outside `#nav-tabs` and are unaffected.
+- The Situation Room view is non-Plotly (pure HTML/SVG), so it does not need the deferred
+  resize trick — `buildSituationView()` can be called directly.

@@ -449,6 +449,68 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     return pd.DataFrame(columns=["zone", "group", "date_str", "cluster_start", "cluster_size"])
 
 
+# ── Situation Room ─────────────────────────────────────────────────────────────
+
+def compute_situation(chart_df: pd.DataFrame) -> dict:
+    """Return last-night and today alert summaries for the Situation Room tab."""
+    now   = datetime.now()
+    today = now.date()
+    yest  = today - timedelta(days=1)
+
+    ln_start = datetime(yest.year,  yest.month,  yest.day,  NIGHT_START)  # 22:00 yesterday
+    ln_end   = datetime(today.year, today.month, today.day, NIGHT_END)    # 06:00 today
+    td_start = ln_end
+    td_end   = now
+
+    def period_stats(start_dt: datetime, end_dt: datetime, label: str) -> dict:
+        def row_in_range(row) -> bool:
+            ds = row.get("date_str")
+            h  = row.get("hour")
+            if not ds or h is None:
+                return False
+            try:
+                dt = datetime(int(ds[:4]), int(ds[5:7]), int(ds[8:10]), int(h))
+            except (ValueError, TypeError):
+                return False
+            return start_dt <= dt < end_dt
+
+        sub = chart_df[chart_df.apply(row_in_range, axis=1)]
+
+        def type_sum(atype: str) -> int:
+            return int(sub[sub["alert_type"] == atype]["count"].sum()) if not sub.empty else 0
+
+        per_region_hourly: dict = {}
+        for _, row in sub.iterrows():
+            grp  = row.get("group") or "Other"
+            hour = int(row.get("hour", 0))
+            cnt  = int(row.get("count", 0))
+            if grp not in per_region_hourly:
+                per_region_hourly[grp] = [0] * 24
+            per_region_hourly[grp][hour] += cnt
+
+        return {
+            "label":             label,
+            "start_iso":         start_dt.isoformat(),
+            "end_iso":           end_dt.isoformat(),
+            "total_missile":     type_sum("Missile alert"),
+            "total_pre":         type_sum("Pre-alert"),
+            "total_drone":       type_sum("Drone alert"),
+            "regions":           sorted(per_region_hourly.keys()),
+            "per_region_hourly": per_region_hourly,
+        }
+
+    return {
+        "last_night": period_stats(
+            ln_start, ln_end,
+            f"{NIGHT_START}:00 yesterday \u2192 {NIGHT_END:02d}:00 today"
+        ),
+        "today": period_stats(
+            td_start, td_end,
+            f"{NIGHT_END:02d}:00 today \u2192 now ({now.strftime('%H:%M')})"
+        ),
+    }
+
+
 # ── Processed-data serialisation ──────────────────────────────────────────────
 
 def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
@@ -472,7 +534,8 @@ def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
 
 def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None,
                 salvo_df: Optional[pd.DataFrame] = None,
-                partial_day: Optional[str] = None, partial_hour: Optional[int] = None) -> None:
+                partial_day: Optional[str] = None, partial_hour: Optional[int] = None,
+                situation_data: Optional[dict] = None) -> None:
     """
     Full-screen interactive chart with three views toggled by a tab bar:
 
@@ -633,12 +696,18 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     # ── Salvo cluster records for JS (individual clusters, aggregated client-side) ─
     if salvo_df is not None and not salvo_df.empty:
         salvo_records_js = json.dumps(
-            salvo_df[["group", "date_str", "cluster_size"]].to_dict(orient="records")
+            salvo_df[["group", "date_str", "cluster_size", "cluster_start"]].to_dict(orient="records")
         )
-        salvo_max_size_js = int(salvo_df["cluster_size"].max())
     else:
-        salvo_records_js  = "[]"
-        salvo_max_size_js = 10
+        salvo_records_js = "[]"
+
+    # ── Situation Room data ───────────────────────────────────────────────────
+    _empty_period = {"label": "", "start_iso": "", "end_iso": "",
+                     "total_missile": 0, "total_pre": 0, "total_drone": 0,
+                     "regions": [], "per_region_hourly": {}}
+    situation_data_js = json.dumps(
+        situation_data if situation_data else {"last_night": _empty_period, "today": _empty_period}
+    )
 
     # ── Serialise everything for JS ────────────────────────────────────────
     def fig_json(fig):
@@ -726,6 +795,23 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     body.dark .tb-btn:hover    {{ background: #333360; color: #fff; }}
     body.dark .tb-btn.active   {{ background: #4455cc; color: #fff; border-color: #4455cc; }}
 
+    /* ── Tab-style overrides for nav buttons only ── */
+    #nav-tabs .tb-btn {{
+      border-radius: 4px 4px 0 0;
+      border: 1px solid transparent;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: #666;
+      padding: 5px 14px;
+      position: relative;
+      top: 1px;
+    }}
+    #nav-tabs .tb-btn:hover {{ background: rgba(68,85,204,0.08); color: #333; border-color: #ddd #ddd transparent; }}
+    #nav-tabs .tb-btn.active {{ background: rgba(245,245,252,0.97); color: #4455cc; border-color: #ddd #ddd transparent; border-bottom: 2px solid #4455cc; }}
+    body.dark #nav-tabs .tb-btn {{ background: transparent; color: #888; border-color: transparent; }}
+    body.dark #nav-tabs .tb-btn:hover {{ background: rgba(68,85,204,0.15); color: #ccc; border-color: #444 #444 transparent; }}
+    body.dark #nav-tabs .tb-btn.active {{ background: rgba(10,10,28,0.95); color: #7788ee; border-color: #444 #444 transparent; border-bottom: 2px solid #7788ee; }}
+
     #sep {{ width: 1px; height: 22px; background: #ccc; margin: 0 4px; flex-shrink:0; }}
     body.dark #sep {{ background: #333; }}
     /* ── Chart area ── */
@@ -735,6 +821,19 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     #view-mismatch {{ top: var(--tb-h); bottom: 0; display: none; }}
     #view-leadtime {{ top: var(--tb-h); bottom: 0; display: none; }}
     #view-salvos   {{ top: var(--tb-h); bottom: 0; display: none; }}
+    /* ── Situation Room ── */
+    #view-situation {{ position: absolute; left:0; right:0; top: var(--tb-h); bottom: 0; display: none; overflow-y: auto; }}
+    .sit-section {{ margin-bottom: 28px; }}
+    .sit-section-title {{ font-size: 15px; font-weight: 700; margin-bottom: 6px; color: #4455cc; }}
+    body.dark .sit-section-title {{ color: #7788ee; }}
+    .sit-sublabel {{ font-size: 11px; color: #888; margin-bottom: 8px; }}
+    .sit-summary {{ font-size: 13px; color: #444; margin-bottom: 12px; line-height: 1.6; }}
+    body.dark .sit-summary {{ color: #aaa; }}
+    .sit-quiet {{ font-style: italic; color: #888; }}
+    .sit-sparklines {{ display: flex; flex-wrap: wrap; gap: 12px; }}
+    .sit-sparkline-cell {{ display: flex; flex-direction: column; align-items: center; min-width: 110px; }}
+    .sit-sparkline-label {{ font-size: 10px; color: #666; margin-top: 4px; text-align: center; max-width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+    body.dark .sit-sparkline-label {{ color: #888; }}
     #leadtime-chart {{ width:100%; height:100%; }}
     #salvos-chart {{ width:100%; height:100%; }}
     #main-chart, #date-full-chart {{ width:100%; height:100%; }}
@@ -816,6 +915,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       #nav-tabs .tb-btn {{
         text-align: left; padding: 9px 14px;
         font-size: 13px; border-radius: 8px;
+        border: 1px solid transparent; top: 0;
       }}
       #nav-tabs > #sep {{ display: none; }}
 
@@ -849,10 +949,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
     <!-- Row 1: navigation -->
     <div id="nav-row">
-      <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()">&#9776;&nbsp;<span id="hamburger-label">By Hour</span></button>
+      <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()">&#9776;&nbsp;<span id="hamburger-label">Situation Room</span></button>
       <div id="nav-tabs">
         <div id="sep"></div>
-        <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
+        <button class="tb-btn active" onclick="setView('situation')" id="btn-situation">&#9889;&nbsp;Situation Room</button>
+        <button class="tb-btn"        onclick="setView('hour')"      id="btn-hour">&#9200;&nbsp;By Hour</button>
         <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
         <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
         <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
@@ -915,18 +1016,15 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         <select id="salvos-date-from" class="tb-region-select" onchange="onSalvosDateFrom(this.value)"></select>
         <span style="font-size:12px;color:#555;">To:</span>
         <select id="salvos-date-to" class="tb-region-select" onchange="onSalvosDateTo(this.value)"></select>
-        <div class="tb-sep"></div>
-        <span style="font-size:12px;color:#555;white-space:nowrap;">Min size:</span>
-        <input type="range" id="salvos-size-slider" min="2" max="10" value="2" step="1"
-               style="width:70px;cursor:pointer;accent-color:#4455cc;"
-               oninput="onSalvosMinSize(this.value)">
-        <span id="salvos-size-label" style="font-size:12px;color:#555;min-width:14px;">2</span>
-        <div class="tb-sep"></div>
-        <button class="tb-btn" onclick="toggleSalvosMode()" id="salvos-mode-btn">&#128200;&nbsp;Missiles</button>
       </div>
 
     </div><!-- /filter-row -->
   </div><!-- /topbar -->
+
+  <!-- Situation Room view -->
+  <div id="view-situation">
+    <div id="situation-content" style="padding:20px 24px;box-sizing:border-box;"></div>
+  </div>
 
   <!-- By-hour view -->
   <div id="view-hour">
@@ -980,7 +1078,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     var gapMissileSeconds   = {gap_missile_js};
     var gapDroneSeconds     = {gap_drone_js};
     var allSalvoRecords     = {salvo_records_js};
-    var salvoMaxSize        = {salvo_max_size_js};
+    var situationData       = {situation_data_js};
     var partialDay          = {partial_day_js};
     var partialHour         = {partial_hour_js};
 
@@ -1003,6 +1101,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
 
     var VIEW_LABELS = {{
+      situation: 'Situation Room',
       hour: 'By Hour', date: 'By Date', mismatch: 'Mismatches',
       leadtime: 'Lead Time', salvos: 'Salvos'
     }};
@@ -1025,15 +1124,13 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
     // ── State ───────────────────────────────────────────────────────────────
     var isDark            = false;
-    var currentView       = 'hour';
+    var currentView       = 'situation';
     var currentDateRange  = null;          // null = all dates
     var activeTypeMode    = 'missile_drone'; // 'pre' | 'missile_drone'
     var hourRegion        = '';
-    var salvosIsMissiles  = false;
     var salvosRegion      = '';
     var salvosDateFrom    = '';
     var salvosDateTo      = '';
-    var salvosMinSize     = 2;
 
     // ── Mobile layout patches (mutate before first plot) ─────────────────────
     if (isMobile()) {{
@@ -1084,8 +1181,12 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
 
     // ── Init ─────────────────────────────────────────────────────────────────
+    // Start on Situation Room; hide hour view by default
+    document.getElementById('view-hour').style.display = 'none';
+    document.getElementById('view-situation').style.display = 'block';
     // Defer initial chart renders so Plotly has correct dimensions
     setTimeout(function() {{
+      buildSituationView();
       Plotly.newPlot('main-chart', hourData, hourLayout, {{responsive:true}});
       Plotly.relayout('main-chart', lightMain);
       updateHourChart();  // apply locked Y scale
@@ -1173,16 +1274,18 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     // ── View toggle ─────────────────────────────────────────────────────────
     function setView(v) {{
       currentView = v;
-      document.getElementById('view-hour').style.display      = v === 'hour'     ? 'block' : 'none';
-      document.getElementById('view-date').style.display      = v === 'date'     ? 'block' : 'none';
-      document.getElementById('view-mismatch').style.display  = v === 'mismatch' ? 'block' : 'none';
-      document.getElementById('view-leadtime').style.display  = v === 'leadtime' ? 'block' : 'none';
-      document.getElementById('view-salvos').style.display    = v === 'salvos'   ? 'block' : 'none';
-      document.getElementById('btn-hour').classList.toggle('active',     v === 'hour');
-      document.getElementById('btn-date').classList.toggle('active',     v === 'date');
-      document.getElementById('btn-mismatch').classList.toggle('active', v === 'mismatch');
-      document.getElementById('btn-leadtime').classList.toggle('active', v === 'leadtime');
-      document.getElementById('btn-salvos').classList.toggle('active',   v === 'salvos');
+      document.getElementById('view-situation').style.display  = v === 'situation' ? 'block' : 'none';
+      document.getElementById('view-hour').style.display       = v === 'hour'      ? 'block' : 'none';
+      document.getElementById('view-date').style.display       = v === 'date'      ? 'block' : 'none';
+      document.getElementById('view-mismatch').style.display   = v === 'mismatch'  ? 'block' : 'none';
+      document.getElementById('view-leadtime').style.display   = v === 'leadtime'  ? 'block' : 'none';
+      document.getElementById('view-salvos').style.display     = v === 'salvos'    ? 'block' : 'none';
+      document.getElementById('btn-situation').classList.toggle('active', v === 'situation');
+      document.getElementById('btn-hour').classList.toggle('active',      v === 'hour');
+      document.getElementById('btn-date').classList.toggle('active',      v === 'date');
+      document.getElementById('btn-mismatch').classList.toggle('active',  v === 'mismatch');
+      document.getElementById('btn-leadtime').classList.toggle('active',  v === 'leadtime');
+      document.getElementById('btn-salvos').classList.toggle('active',    v === 'salvos');
       document.getElementById('hour-controls').style.display     = v === 'hour'     ? 'flex'  : 'none';
       document.getElementById('date-controls').style.display     = v === 'date'     ? 'flex'  : 'none';
       document.getElementById('mismatch-controls').style.display = v === 'mismatch' ? 'flex'  : 'none';
@@ -1195,7 +1298,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       syncTopbarHeight();
       // Force Plotly to redraw at the now-correct dimensions
       setTimeout(function() {{
-        if (v === 'date') {{
+        if (v === 'situation') {{
+          buildSituationView();
+        }} else if (v === 'date') {{
           Plotly.react('date-full-chart', dateData, dateLayout, {{responsive:true}});
           Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
         }} else if (v === 'mismatch') {{
@@ -1391,20 +1496,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }})();
     buildSalvosChart();
 
-    // Set slider max from data
-    (function() {{
-      var sl = document.getElementById('salvos-size-slider');
-      sl.max = salvoMaxSize;
-    }})();
-
     function onSalvosRegion(val)   {{ salvosRegion  = val; buildSalvosChart(); }}
     function onSalvosDateFrom(val) {{ salvosDateFrom = val; buildSalvosChart(); }}
     function onSalvosDateTo(val)   {{ salvosDateTo   = val; buildSalvosChart(); }}
-    function onSalvosMinSize(val)  {{
-      salvosMinSize = parseInt(val);
-      document.getElementById('salvos-size-label').textContent = val;
-      buildSalvosChart();
-    }}
 
     function onLeadtimeRegion(val) {{
       leadtimeRegion = val;
@@ -1421,13 +1515,6 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       document.getElementById('mismatch-mode-btn').innerHTML =
         mismatchIsPct ? 'Abs&nbsp;View' : '%&nbsp;View';
       buildMismatchCharts(mismatchRegion);
-    }}
-
-    function toggleSalvosMode() {{
-      salvosIsMissiles = !salvosIsMissiles;
-      document.getElementById('salvos-mode-btn').innerHTML =
-        salvosIsMissiles ? '&#128200;&nbsp;Clusters' : '&#128200;&nbsp;Missiles';
-      buildSalvosChart();
     }}
 
     function buildMismatchCharts(region) {{
@@ -1664,35 +1751,20 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
     buildLeadTimeChart('');
 
-    // ── Salvo clusters heatmap ───────────────────────────────────────────────
+    // ── Salvo activity by hour of day (one line per day) ────────────────────
     function buildSalvosChart() {{
-      var yKey   = salvosIsMissiles ? 'total_missiles' : 'cluster_count';
-      var yLabel = salvosIsMissiles ? 'Total Missiles in Salvos' : 'Salvo Clusters';
       var textColor = isDark ? '#cccccc' : '#333333';
       var gridColor = isDark ? '#2a2a3e' : '#e0e0e0';
       var paperBg   = isDark ? '#0f0f1a' : '#fafafa';
       var plotBg    = isDark ? '#1a1a2e' : 'white';
-      var lineColor = '#4455cc';
 
-      // Apply filters to individual cluster records
       var filtered = allSalvoRecords.filter(function(r) {{
-        return r.cluster_size >= salvosMinSize
-          && (!salvosRegion   || r.group    === salvosRegion)
-          && (!salvosDateFrom || r.date_str >= salvosDateFrom)
-          && (!salvosDateTo   || r.date_str <= salvosDateTo);
+        return (!salvosRegion   || r.group    === salvosRegion)
+            && (!salvosDateFrom || r.date_str >= salvosDateFrom)
+            && (!salvosDateTo   || r.date_str <= salvosDateTo);
       }});
 
-      // Aggregate by date (sum across all matching regions)
-      var dateAgg = {{}};
-      filtered.forEach(function(r) {{
-        if (!dateAgg[r.date_str]) dateAgg[r.date_str] = {{cluster_count: 0, total_missiles: 0}};
-        dateAgg[r.date_str].cluster_count++;
-        dateAgg[r.date_str].total_missiles += r.cluster_size;
-      }});
-      var dates = Object.keys(dateAgg).sort();
-      var ys    = dates.map(function(d) {{ return dateAgg[d][yKey]; }});
-
-      if (!dates.length) {{
+      if (!filtered.length) {{
         Plotly.react('salvos-chart', [], {{
           paper_bgcolor: paperBg, plot_bgcolor: plotBg, font: {{color: textColor}},
           title: {{text: 'No salvo data for selected filters', x: 0.5, font: {{color: textColor}}}},
@@ -1700,61 +1772,134 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         return;
       }}
 
-      var sizeNote = salvosMinSize > 2 ? ' \u00b7 min size \u2265' + salvosMinSize : '';
-      var regionNote = salvosRegion ? ' \u00b7 ' + salvosRegion : '';
-      var annotations = partialDay ? [{{
-        x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
-        text: '\u26a0 partial', showarrow: false,
-        font: {{size: 9, color: '#ffaa44'}}, xanchor: 'center',
-      }}] : [];
+      // Group by (date_str, hour), summing cluster_size → missiles per hour per day
+      var byDateHour = {{}};
+      var allDatesSet = {{}};
+      filtered.forEach(function(r) {{
+        var hour = 0;
+        if (r.cluster_start) {{
+          var ti = r.cluster_start.indexOf('T');
+          if (ti !== -1) hour = parseInt(r.cluster_start.substring(ti + 1, ti + 3), 10);
+        }}
+        var key = r.date_str + '|' + hour;
+        byDateHour[key] = (byDateHour[key] || 0) + r.cluster_size;
+        allDatesSet[r.date_str] = true;
+      }});
 
+      var allDates = Object.keys(allDatesSet).sort();
+      var palette  = ['#4455cc','#d62728','#2ca02c','#ff7f0e','#17becf',
+                      '#9467bd','#e377c2','#f5c542','#98df8a','#56aeff','#ffbb78'];
+      var hours24  = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];
+
+      var traces = allDates.map(function(date, idx) {{
+        var ys    = hours24.map(function(h) {{ return byDateHour[date + '|' + h] || 0; }});
+        var color = palette[idx % palette.length];
+        return {{
+          type: 'scatter', mode: 'lines+markers',
+          name: date.slice(5),
+          x: hours24, y: ys,
+          line:   {{color: color, width: 1.8}},
+          marker: {{size: 5, color: color}},
+          hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> missiles<extra></extra>',
+        }};
+      }});
+
+      var regionNote = salvosRegion ? ' \u00b7 ' + salvosRegion : '';
       var viewEl = document.getElementById('view-salvos');
       var viewH  = viewEl.offsetHeight || (window.innerHeight - 74);
       var viewW  = viewEl.offsetWidth  || window.innerWidth;
 
-      var trace = {{
-        type: 'scatter',
-        x: dates,
-        y: ys,
-        mode: 'lines+markers',
-        line: {{shape: 'spline', smoothing: 1.3, color: lineColor, width: 2.5}},
-        marker: {{size: 6, color: lineColor, opacity: 0.8}},
-        hovertemplate: '<b>%{{x}}</b><br>' + yLabel + ': <b>%{{y}}</b><extra></extra>',
-      }};
-
       var layout = {{
-        height: viewH,
-        width:  viewW,
+        height: viewH, width: viewW,
         title: {{
-          text: 'Salvo Concentration over Time' + regionNote +
-                '<br><sup>' + yLabel + ' per day \u00b7 spline-smoothed' +
-                ' \u00b7 salvo = 2+ missiles, gap \u226430 min' + sizeNote + '</sup>',
+          text: 'Missile Salvo Activity by Hour of Day' + regionNote +
+                '<br><sup>Missiles per hour \u00b7 one line per day \u00b7 salvo\u202f=\u202f2+ missiles gap\u202f\u226430\u202fmin</sup>',
           x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
-          type: 'category',
-          tickvals: dates,
-          ticktext: dates.map(function(d) {{ return d.slice(5); }}),
-          tickangle: -45,
-          tickfont: {{size: 9, color: textColor}},
-          color: textColor,
+          title: 'Hour of Day',
+          tickmode: 'array',
+          tickvals: [0,2,4,6,8,10,12,14,16,18,20,22],
+          ticktext: ['0h','2h','4h','6h','8h','10h','12h','14h','16h','18h','20h','22h'],
+          range: [-0.5, 23.5],
           showgrid: true, gridcolor: gridColor,
+          zeroline: false, color: textColor,
         }},
         yaxis: {{
-          title: yLabel,
+          title: 'Missiles in Salvos',
           showgrid: true, gridcolor: gridColor,
           zeroline: true, zerolinecolor: gridColor,
-          tickfont: {{size: 10, color: textColor}},
           color: textColor,
         }},
         plot_bgcolor:  plotBg,
         paper_bgcolor: paperBg,
         font: {{family: 'Arial, Helvetica, sans-serif', color: textColor}},
-        margin: chartMargins({{t:80,b:80,l:70,r:40}}, {{t:55,b:60,l:50,r:15}}),
-        annotations: annotations,
+        legend: isMobile()
+          ? {{orientation: 'h', x: 0.5, xanchor: 'center', y: -0.15, font: {{size: 8, color: textColor}}}}
+          : {{font: {{size: 10, color: textColor}},
+             bgcolor: isDark ? 'rgba(26,26,46,0.85)' : 'rgba(255,255,255,0.85)',
+             bordercolor: isDark ? '#444' : '#ccc', borderwidth: 1}},
+        margin: chartMargins({{t:80,b:60,l:70,r:40}}, {{t:55,b:100,l:45,r:15}}),
       }};
 
-      Plotly.react('salvos-chart', [trace], layout, {{responsive: true}});
+      Plotly.react('salvos-chart', traces, layout, {{responsive: true}});
+    }}
+
+    // ── Situation Room ───────────────────────────────────────────────────────
+    function makeSVGSparkline(hourlyArr, color) {{
+      var W = 120, H = 32, barW = Math.floor(W / 24);
+      var maxV = Math.max.apply(null, hourlyArr.concat([1]));
+      var bars = '';
+      for (var h = 0; h < 24; h++) {{
+        var bh   = Math.round(((hourlyArr[h] || 0) / maxV) * H);
+        var isNight = (h >= 22 || h < 6);
+        var fill = isNight ? color : color + '88';
+        bars += '<rect x="' + (h * barW) + '" y="' + (H - bh) + '" width="' + (barW - 1) + '" height="' + bh + '" fill="' + fill + '"/>';
+      }}
+      return '<svg width="' + W + '" height="' + H + '" xmlns="http://www.w3.org/2000/svg" style="display:block;">' + bars + '</svg>';
+    }}
+
+    function buildSituationView() {{
+      var el = document.getElementById('situation-content');
+      if (!el) return;
+      var titles = {{ last_night: 'What happened last night?', today: 'What\u2019s happening today?' }};
+      var html = '';
+
+      ['last_night', 'today'].forEach(function(key) {{
+        var d = situationData[key];
+        if (!d) return;
+        html += '<div class="sit-section">';
+        html += '<div class="sit-section-title">' + titles[key] + '</div>';
+        html += '<div class="sit-sublabel">' + (d.label || '') + '</div>';
+
+        if (!d.total_missile && !d.total_pre && !d.total_drone) {{
+          html += '<div class="sit-summary sit-quiet">Quiet \u2014 no alerts recorded for this period.</div>';
+        }} else {{
+          var parts = [];
+          if (d.total_missile) parts.push(d.total_missile + ' missile alert' + (d.total_missile !== 1 ? 's' : ''));
+          if (d.total_pre)     parts.push(d.total_pre     + ' pre-alert'     + (d.total_pre     !== 1 ? 's' : ''));
+          if (d.total_drone)   parts.push(d.total_drone   + ' drone alert'   + (d.total_drone   !== 1 ? 's' : ''));
+          var nr = d.regions.length;
+          var rStr = nr <= 3 ? d.regions.join(', ') : d.regions.slice(0, 3).join(', ') + ' and ' + (nr - 3) + ' more';
+          html += '<div class="sit-summary">' + parts.join(' and ') + ' across ' + nr + ' region' + (nr !== 1 ? 's' : '') + ' (' + rStr + ').</div>';
+
+          var regionKeys = Object.keys(d.per_region_hourly || {{}}).sort();
+          if (regionKeys.length) {{
+            html += '<div class="sit-sparklines">';
+            regionKeys.forEach(function(region) {{
+              var color = groupColors[region] || '#888888';
+              html += '<div class="sit-sparkline-cell">';
+              html += makeSVGSparkline(d.per_region_hourly[region], color);
+              html += '<div class="sit-sparkline-label" title="' + region + '">' + region + '</div>';
+              html += '</div>';
+            }});
+            html += '</div>';
+          }}
+        }}
+        html += '</div>';
+      }});
+
+      el.innerHTML = html;
     }}
 
     // ── Dark / light toggle ─────────────────────────────────────────────────
@@ -1769,6 +1914,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       if (dateEl && dateEl._fullLayout) {{
         Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
       }}
+      if (currentView === 'situation') buildSituationView();
       buildMismatchCharts(mismatchRegion);
       buildLeadTimeChart(leadtimeRegion);
       buildSalvosChart();
@@ -1868,9 +2014,13 @@ def main() -> None:
     # 6. Save processed data (enables fast style-only reruns via build_chart.py)
     save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour)
 
-    # 7. Chart
+    # 7. Situation Room summary (time-sensitive, computed fresh each run)
+    situation_data = compute_situation(chart_df)
+
+    # 8. Chart
     build_chart(chart_df, mismatch_df, salvo_df=salvo_df,
-                partial_day=partial_day, partial_hour=partial_hour)
+                partial_day=partial_day, partial_hour=partial_hour,
+                situation_data=situation_data)
     print("\nDone.  Open output/index.html in your browser.")
 
 

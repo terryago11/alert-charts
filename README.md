@@ -8,6 +8,14 @@ Data is fetched automatically from a public archive and refreshed daily. No serv
 
 ## What it shows
 
+### ⚡ Situation Room *(default view)*
+At-a-glance summary of recent activity, updated each time you run the script.
+
+- **What happened last night?** — 22:00 yesterday → 06:00 today
+- **What's happening today?** — 06:00 → now
+
+Each section shows a verbal summary ("X missile alerts across N regions") and per-region sparklines with night hours highlighted.
+
 ### By Hour
 Stacked bar chart of alert counts per hour of day (0–23), broken down by region.
 A date-range slider lets you focus on any period; alert-type toggles filter by Pre-alert / Missile alert / Drone alert.
@@ -33,11 +41,11 @@ Histogram of the gap (in minutes) between a pre-alert and its paired missile ale
 Filter by region to compare warning times across the country.
 
 ### Salvos
-Heatmap showing salvo intensity by region and day. A **salvo** is a cluster of 2 or more missile alerts to the same zone where the gap between consecutive alerts is ≤ 30 minutes.
+Overlaid line chart — one line per day — showing missile volume by hour of day (0–23).
 
-- Color encodes intensity — toggle between **salvo cluster count** and **total missiles in salvos**
-- Filter by **region**, **date range**, and **minimum salvo size** (slider) to focus on the heaviest attacks
-- The heatmap immediately reveals which regions experience sustained repeated fire and when
+- X axis = hour of day; Y axis = total missiles that hour (flat count, not cumulative)
+- Each day is a separate coloured line, making it easy to compare attack timing patterns across dates
+- Filter by **region** and **date range**
 
 ## Alert types
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from main import build_chart
+from main import build_chart, compute_situation
 
 DATA_FILE = Path("data/processed.json")
 
@@ -35,12 +35,15 @@ def main() -> None:
     partial_day  = payload.get("partial_day")
     partial_hour = payload.get("partial_hour")
 
+    situation_data = compute_situation(chart_df)
+
     build_chart(
         chart_df,
         mismatch_df  if not mismatch_df.empty  else None,
-        salvo_df     = salvo_df if not salvo_df.empty else None,
-        partial_day  = partial_day,
-        partial_hour = partial_hour,
+        salvo_df      = salvo_df if not salvo_df.empty else None,
+        partial_day   = partial_day,
+        partial_hour  = partial_hour,
+        situation_data = situation_data,
     )
 
 
