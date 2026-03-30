@@ -967,7 +967,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     <div id="filter-row">
 
       <!-- By Hour controls -->
-      <div id="hour-controls" style="display:flex;align-items:center;gap:6px;">
+      <div id="hour-controls" style="display:none;align-items:center;gap:6px;">
         <select id="hour-region-select" class="tb-region-select" onchange="onHourRegion(this.value)">
           <option value="">All regions</option>
         </select>
