@@ -6,3 +6,8 @@ venv/
 .DS_Store
 offline_source/
 .claude/
+data/processed.json
+data/cities.json
+data/*.xlsx
+data/*.xls
+data/.gitkeep

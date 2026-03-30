@@ -449,6 +449,25 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     return pd.DataFrame(columns=["zone", "group", "date_str", "cluster_start", "cluster_size"])
 
 
+# ── Processed-data serialisation ──────────────────────────────────────────────
+
+def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
+                   salvo_df: Optional[pd.DataFrame],
+                   partial_day: Optional[str], partial_hour: Optional[int]) -> None:
+    """Serialise aggregated data to data/processed.json for use by build_chart.py."""
+    DATA_DIR.mkdir(exist_ok=True)
+    payload = {
+        "chart_df":    chart_df.to_dict(orient="records"),
+        "mismatch_df": mismatch_df.to_dict(orient="records") if mismatch_df is not None else [],
+        "salvo_df":    salvo_df.to_dict(orient="records")    if salvo_df    is not None else [],
+        "partial_day":  partial_day,
+        "partial_hour": partial_hour,
+    }
+    path = DATA_DIR / "processed.json"
+    path.write_text(json.dumps(payload, default=str), encoding="utf-8")
+    print(f"  Processed data saved → {path}")
+
+
 # ── Chart ─────────────────────────────────────────────────────────────────────
 
 def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None,
@@ -500,7 +519,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         barmode="stack",
         title=dict(
             text="IDF Homefront Command — Alert Activity by Hour of Day<br>"
-                 "<sup>Stacked by region · drag date slider below to filter"
+                 "<sup>Stacked by region · use filters above to narrow by date/region"
                  " · click a bar to drill down by day</sup>",
             x=0.5, font=dict(size=15, color="#cccccc"),
         ),
@@ -524,27 +543,6 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         margin=dict(t=80, b=40, l=70, r=40),
     )
 
-    # ── Date mini-chart (for hour-view date slider) ────────────────────────
-    daily_total = chart_df.groupby("date_str")["count"].sum().reset_index()
-    date_mini_fig = go.Figure(go.Bar(
-        x=daily_total["date_str"].tolist(),
-        y=daily_total["count"].tolist(),
-        marker=dict(color="#4466aa", opacity=0.75),
-        hovertemplate="%{x}: <b>%{y:,}</b> alerts<extra></extra>",
-        showlegend=False,
-    ))
-    date_mini_fig.update_layout(
-        xaxis=dict(
-            showgrid=False, color="#777",
-            rangeslider=dict(visible=True, thickness=0.4),
-        ),
-        yaxis=dict(showgrid=False, color="#777", title=""),
-        plot_bgcolor="#1a1a2e", paper_bgcolor="#0f0f1a",
-        font=dict(family="Arial, Helvetica, sans-serif", color="#777", size=10),
-        margin=dict(t=4, b=16, l=70, r=40),
-        showlegend=False,
-    )
-
     # ── "By Date" cumulative traces ────────────────────────────────────────
     date_traces = []
     for group in groups:
@@ -559,10 +557,14 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         )
         gdf.columns = ["date_str", "daily"]
         gdf["cumulative"] = gdf["daily"].cumsum()
+        n = len(gdf)
+        label_text = [""] * (n - 1) + [group] if n > 0 else []
         date_traces.append(go.Scatter(
             x=gdf["date_str"].tolist(), y=gdf["cumulative"].tolist(),
-            mode="lines+markers", name=group,
+            mode="lines+markers+text", name=group, showlegend=False,
             line=dict(color=color, width=2.5), marker=dict(size=5, color=color),
+            text=label_text, textposition="middle right",
+            textfont=dict(size=10, color=color),
             customdata=list(zip(gdf["daily"].tolist(), gdf["cumulative"].tolist())),
             hovertemplate=(
                 f"<b>{group}</b><br>%{{x}}<br>"
@@ -575,23 +577,13 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     date_fig.update_layout(
         title=dict(
             text="IDF Homefront Command — Cumulative Alerts by Region<br>"
-                 "<sup>Deduplicated per zone · use range selector or slider"
-                 " · click a line to drill down by day</sup>",
+                 "<sup>Deduplicated per zone · use date filters above to zoom</sup>",
             x=0.5, font=dict(size=15, color="#cccccc"),
         ),
         xaxis=dict(
             title="Date", showgrid=True, gridcolor="#2a2a3e",
             zeroline=False, color="#cccccc",
-            rangeslider=dict(visible=True, thickness=0.05),
-            rangeselector=dict(
-                buttons=[
-                    dict(count=7,  label="1w",  step="day", stepmode="backward"),
-                    dict(count=14, label="2w",  step="day", stepmode="backward"),
-                    dict(step="all", label="All"),
-                ],
-                bgcolor="#252540", activecolor="#444470",
-                font=dict(color="#cccccc"),
-            ),
+            type="date", dtick=86400000, tickformat="%b %d", tickangle=-45,
         ),
         yaxis=dict(
             title="Cumulative Alerts", showgrid=True,
@@ -599,12 +591,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         ),
         plot_bgcolor="#1a1a2e", paper_bgcolor="#0f0f1a",
         font=dict(family="Arial, Helvetica, sans-serif", color="#cccccc"),
-        legend=dict(
-            title=dict(text="Region"), font=dict(size=11, color="#cccccc"),
-            bgcolor="rgba(26,26,46,0.85)", bordercolor="#444", borderwidth=1,
-        ),
-        hovermode="x unified",
-        margin=dict(t=80, b=60, l=70, r=40),
+        showlegend=False,
+        hovermode="closest",
+        margin=dict(t=80, b=80, l=70, r=100),
         annotations=([dict(
             x=partial_day, y=1.06, xref="x", yref="paper",
             text=f"\u26a0 {partial_day}: partial day (data through {partial_hour:02d}:xx)",
@@ -656,9 +645,8 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         d = json.loads(fig.to_json())
         return json.dumps(d["data"]), json.dumps(d["layout"])
 
-    hour_data_js,      hour_layout_js      = fig_json(hour_fig)
-    date_mini_data_js, date_mini_layout_js = fig_json(date_mini_fig)
-    date_data_js,      date_layout_js      = fig_json(date_fig)
+    hour_data_js,  hour_layout_js  = fig_json(hour_fig)
+    date_data_js,  date_layout_js  = fig_json(date_fig)
 
     hourly_js       = json.dumps(chart_df.to_dict(orient="records"))
     group_colors_js = json.dumps(GROUP_COLORS)
@@ -698,80 +686,59 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <title>IDF Alert Activity</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='2' y='18' width='6' height='12' fill='%234e79a7'/><rect x='10' y='10' width='6' height='20' fill='%23f28e2b'/><rect x='18' y='4' width='6' height='26' fill='%23e15759'/><rect x='26' y='13' width='6' height='17' fill='%2376b7b2'/></svg>">
   <style>
-    :root {{ --tb-h: 46px; --mini-h: 180px; }}
+    :root {{ --tb-h: 74px; }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     html, body {{
       width: 100%; height: 100%; overflow: hidden;
-      background: #0f0f1a; transition: background 0.25s;
+      background: #fafafa; transition: background 0.25s;
       font-family: Arial, Helvetica, sans-serif;
     }}
-    body.light {{ background: #fafafa; }}
+    body.dark {{ background: #0f0f1a; }}
 
     /* ── Top bar ── */
     #topbar {{
-      position: fixed; top: 0; left: 0; right: 0; height: var(--tb-h); z-index: 100;
-      display: flex; align-items: center; gap: 10px; padding: 0 16px;
-      background: rgba(10,10,28,0.92); backdrop-filter: blur(6px);
-      border-bottom: 1px solid #2a2a3e;
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; flex-direction: column; align-items: stretch;
+      background: rgba(245,245,252,0.97); backdrop-filter: blur(6px);
+      border-bottom: 1px solid #ddd;
     }}
-    #nav-tabs {{ display: flex; align-items: center; gap: 10px; }}
+    #nav-row {{
+      display: flex; align-items: center; gap: 10px; padding: 4px 16px; height: 40px;
+    }}
+    #nav-spacer {{ flex: 1; }}
+    #filter-row {{
+      display: flex; align-items: center; gap: 8px; padding: 3px 16px; min-height: 32px;
+      border-top: 1px solid #ddd; background: rgba(230,230,248,0.9);
+    }}
+    body.dark #topbar {{ background: rgba(10,10,28,0.95); border-color: #2a2a3e; }}
+    body.dark #filter-row {{ background: rgba(5,5,20,0.82); border-color: #2a2a3e; }}
+    #nav-tabs {{ display: flex; align-items: center; gap: 8px; }}
     #hamburger-btn {{ display: none; align-items: center; gap: 5px; }}
-    body.light #topbar {{
-      background: rgba(245,245,252,0.95); border-color: #ddd;
-    }}
     .tb-btn {{
-      padding: 5px 13px; border-radius: 16px; cursor: pointer;
-      font-size: 12px; font-weight: 600; border: 1px solid #555;
-      background: #252540; color: #bbb; user-select: none;
+      padding: 4px 12px; border-radius: 16px; cursor: pointer;
+      font-size: 12px; font-weight: 600; border: 1px solid #ccc;
+      background: #eee; color: #555; user-select: none;
       transition: background 0.15s, color 0.15s;
     }}
-    .tb-btn:hover  {{ background: #333360; color: #fff; }}
+    .tb-btn:hover  {{ background: #dde; color: #222; }}
     .tb-btn.active {{ background: #4455cc; color: #fff; border-color: #4455cc; }}
-    body.light .tb-btn          {{ background: #eee; color: #555; border-color: #ccc; }}
-    body.light .tb-btn:hover    {{ background: #dde; color: #222; }}
-    body.light .tb-btn.active   {{ background: #4455cc; color: #fff; border-color: #4455cc; }}
+    body.dark .tb-btn          {{ background: #252540; color: #bbb; border-color: #555; }}
+    body.dark .tb-btn:hover    {{ background: #333360; color: #fff; }}
+    body.dark .tb-btn.active   {{ background: #4455cc; color: #fff; border-color: #4455cc; }}
 
-    #sep {{ width: 1px; height: 22px; background: #333; margin: 0 4px; flex-shrink:0; }}
-    body.light #sep {{ background: #ccc; }}
+    #sep {{ width: 1px; height: 22px; background: #ccc; margin: 0 4px; flex-shrink:0; }}
+    body.dark #sep {{ background: #333; }}
     /* ── Chart area ── */
     #view-hour, #view-date, #view-mismatch, #view-leadtime, #view-salvos {{ position: absolute; left:0; right:0; }}
-    #view-hour {{
-      top: var(--tb-h);
-      bottom: var(--mini-h);   /* room for date slider */
-    }}
-    #view-date {{
-      top: var(--tb-h);
-      bottom: 0;
-      display: none;
-    }}
-    #view-mismatch {{
-      top: var(--tb-h);
-      bottom: 0;
-      display: none;
-    }}
-    #view-leadtime {{
-      top: var(--tb-h);
-      bottom: 0;
-      display: none;
-    }}
-    #view-salvos {{
-      top: var(--tb-h);
-      bottom: 0;
-      display: none;
-    }}
+    #view-hour  {{ top: var(--tb-h); bottom: 0; }}
+    #view-date  {{ top: var(--tb-h); bottom: 0; display: none; }}
+    #view-mismatch {{ top: var(--tb-h); bottom: 0; display: none; }}
+    #view-leadtime {{ top: var(--tb-h); bottom: 0; display: none; }}
+    #view-salvos   {{ top: var(--tb-h); bottom: 0; display: none; }}
     #leadtime-chart {{ width:100%; height:100%; }}
     #salvos-chart {{ width:100%; height:100%; }}
     #main-chart, #date-full-chart {{ width:100%; height:100%; }}
-    #mismatch-chart-bar {{ width:100%; height:57%; }}
-    #mismatch-chart-cum {{ width:100%; height:43%; }}
-    #date-mini-wrap {{
-      position: fixed; bottom: 0; left: 0; right: 0;
-      height: var(--mini-h); z-index: 50;
-      background: #0f0f1a;
-      border-top: 1px solid #2a2a3e;
-    }}
-    body.light #date-mini-wrap {{ background: #fafafa; border-color: #ddd; }}
-    #date-mini-chart {{ width:100%; height:100%; }}
+    #mismatch-chart-bar {{ width:100%; height:100%; }}
 
     /* ── Modal ── */
     #modal-backdrop {{
@@ -780,78 +747,70 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
     #modal-backdrop.open {{ display: flex; }}
     #modal {{
-      background: #12122a; color: #ccc; border-radius: 10px;
+      background: #fff; color: #333; border-radius: 10px;
       width: 93vw; max-height: 88vh; display: flex; flex-direction: column;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.65); border: 1px solid #333;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.25); border: 1px solid #ddd;
     }}
-    body.light #modal {{ background: #fff; color: #333; border-color: #ddd; }}
+    body.dark #modal {{ background: #12122a; color: #ccc; border-color: #333; box-shadow: 0 8px 40px rgba(0,0,0,0.65); }}
     #modal-header {{
       display: flex; align-items: center; justify-content: space-between;
-      padding: 13px 18px; border-bottom: 1px solid #2a2a4a; flex-shrink: 0;
+      padding: 13px 18px; border-bottom: 1px solid #ddd; flex-shrink: 0;
     }}
-    body.light #modal-header {{ border-color: #ddd; }}
+    body.dark #modal-header {{ border-color: #2a2a4a; }}
     #modal-title {{ font-size: 15px; font-weight: 700; }}
     #modal-close {{
       cursor: pointer; font-size: 22px; line-height: 1;
       background: none; border: none; color: #999; padding: 0 4px;
     }}
-    #modal-close:hover {{ color: #fff; }}
-    body.light #modal-close:hover {{ color: #000; }}
+    #modal-close:hover {{ color: #000; }}
+    body.dark #modal-close:hover {{ color: #fff; }}
     #modal-body {{ overflow-y: auto; flex: 1; padding: 10px; }}
     #modal-chart {{ width: 100%; }}
     #date-select {{
-      background: #252540; color: #ccc; border: 1px solid #444;
+      background: #fff; color: #333; border: 1px solid #bbb;
       border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer;
     }}
-    body.light #date-select {{ background: #fff; color: #333; border-color: #bbb; }}
+    body.dark #date-select {{ background: #252540; color: #ccc; border-color: #444; }}
 
-    .tb-sep {{ width:1px; height:22px; background:#333; margin:0 4px; flex-shrink:0; }}
-    body.light .tb-sep {{ background: #ccc; }}
+    .tb-sep {{ width:1px; height:22px; background:#ccc; margin:0 4px; flex-shrink:0; }}
+    body.dark .tb-sep {{ background: #333; }}
 
-    #date-select-label {{ font-size:12px; color:#aaa; white-space:nowrap; }}
-    body.light #date-select-label {{ color: #555; }}
+    #date-select-label {{ font-size:12px; color:#555; white-space:nowrap; }}
+    body.dark #date-select-label {{ color: #aaa; }}
 
-    #type-label {{ font-size: 11px; color: #777; white-space: nowrap; }}
-    body.light #type-label {{ color: #555; }}
+    #type-label {{ font-size: 11px; color: #555; white-space: nowrap; }}
+    body.dark #type-label {{ color: #777; }}
 
     .tb-region-select {{
-      background: #252540; color: #ccc; border: 1px solid #444;
+      background: #fff; color: #333; border: 1px solid #bbb;
       border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer;
     }}
-    body.light .tb-region-select {{ background: #fff; color: #333; border-color: #bbb; }}
-
-    body.light #modal-close {{ color: #555; }}
+    body.dark .tb-region-select {{ background: #252540; color: #ccc; border-color: #444; }}
 
     /* ── Mobile ── */
     @media (max-width: 768px) {{
-      :root {{ --mini-h: 130px; }}
-
-      #topbar {{
-        height: auto;
-        flex-wrap: wrap;
-        padding: 6px 10px;
-        row-gap: 5px;
-      }}
+      #nav-row {{ padding: 4px 8px; }}
+      #filter-row {{ padding: 3px 8px; flex-wrap: wrap; row-gap: 4px; }}
 
       /* Hamburger visible; nav tabs become a fixed dropdown */
       #hamburger-btn {{ display: inline-flex; }}
       #nav-tabs {{
         display: none;
         position: fixed;
-        top: var(--tb-h);
+        top: 40px;
         left: 0; right: 0;
         flex-direction: column;
         align-items: stretch;
         gap: 4px;
         padding: 8px 12px;
-        background: rgba(10,10,28,0.97);
-        border-bottom: 1px solid #2a2a3e;
+        background: rgba(245,245,252,0.97);
+        border-bottom: 1px solid #ddd;
         z-index: 200;
         backdrop-filter: blur(6px);
       }}
-      body.light #nav-tabs {{
-        background: rgba(245,245,252,0.97);
-        border-color: #ddd;
+      body.dark #nav-tabs {{
+        background: rgba(10,10,28,0.97);
+        border-color: #2a2a3e;
       }}
       #nav-tabs.open {{ display: flex; }}
       #nav-tabs .tb-btn {{
@@ -864,14 +823,14 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       #sep {{ display: none; }}
       #sep2 {{ display: none !important; }}
 
-      .tb-btn {{ padding: 5px 8px; font-size: 11px; }}
+      .tb-btn {{ padding: 4px 7px; font-size: 11px; }}
 
       #date-select, .tb-region-select {{
         max-width: 110px;
         font-size: 11px;
       }}
 
-      #salvos-controls, #mismatch-controls, #leadtime-controls, #type-btns {{
+      #salvos-controls, #mismatch-controls, #leadtime-controls, #hour-controls, #date-controls {{
         flex-wrap: wrap;
         row-gap: 4px;
       }}
@@ -883,68 +842,95 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
   </style>
 </head>
-<body>
+<body class="light">
 
   <!-- Top bar -->
   <div id="topbar">
-    <button class="tb-btn" onclick="toggleTheme()" id="theme-btn">&#9728;&#65039;&nbsp;Light</button>
-    <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()">&#9776;&nbsp;<span id="hamburger-label">By Hour</span></button>
-    <div id="nav-tabs">
-      <div id="sep"></div>
-      <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
-      <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
-      <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
-      <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
-      <button class="tb-btn"        onclick="setView('salvos')"  id="btn-salvos">&#128165;&nbsp;Salvos</button>
+
+    <!-- Row 1: navigation -->
+    <div id="nav-row">
+      <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()">&#9776;&nbsp;<span id="hamburger-label">By Hour</span></button>
+      <div id="nav-tabs">
+        <div id="sep"></div>
+        <button class="tb-btn active" onclick="setView('hour')"     id="btn-hour">&#9200;&nbsp;By Hour</button>
+        <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
+        <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
+        <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
+        <button class="tb-btn"        onclick="setView('salvos')"   id="btn-salvos">&#128165;&nbsp;Salvos</button>
+      </div>
+      <div id="nav-spacer"></div>
+      <button class="tb-btn" onclick="toggleTheme()" id="theme-btn">&#127769;&nbsp;Dark</button>
     </div>
-    <div id="sep2" class="tb-sep"></div>
-    <label for="date-select" id="date-select-label">Date:</label>
-    <select id="date-select" onchange="onDateSelect(this.value)"></select>
-    <div id="sep3" class="tb-sep"></div>
-    <span id="type-label">Alert type:</span>
-    <div id="type-btns" style="display:flex;gap:6px;"></div>
-    <div id="mismatch-controls" style="display:none;align-items:center;gap:6px;">
-      <div class="tb-sep"></div>
-      <select id="mismatch-region-select" class="tb-region-select" onchange="onMismatchRegion(this.value)">
-        <option value="">All regions</option>
-      </select>
-      <button class="tb-btn" onclick="toggleMismatchMode()" id="mismatch-mode-btn">%&nbsp;View</button>
-    </div>
-    <div id="leadtime-controls" style="display:none;align-items:center;gap:6px;">
-      <div class="tb-sep"></div>
-      <select id="leadtime-region-select" class="tb-region-select" onchange="onLeadtimeRegion(this.value)">
-        <option value="">All regions</option>
-      </select>
-    </div>
-    <div id="salvos-controls" style="display:none;align-items:center;gap:6px;">
-      <div class="tb-sep"></div>
-      <select id="salvos-region-select" class="tb-region-select" onchange="onSalvosRegion(this.value)">
-        <option value="">All regions</option>
-      </select>
-      <div class="tb-sep"></div>
-      <span id="salvos-date-label" style="font-size:12px;color:#aaa;white-space:nowrap;">From:</span>
-      <select id="salvos-date-from" class="tb-region-select" onchange="onSalvosDateFrom(this.value)"></select>
-      <span style="font-size:12px;color:#aaa;">To:</span>
-      <select id="salvos-date-to" class="tb-region-select" onchange="onSalvosDateTo(this.value)"></select>
-      <div class="tb-sep"></div>
-      <span style="font-size:12px;color:#aaa;white-space:nowrap;">Min size:</span>
-      <input type="range" id="salvos-size-slider" min="2" max="10" value="2" step="1"
-             style="width:70px;cursor:pointer;accent-color:#4455cc;"
-             oninput="onSalvosMinSize(this.value)">
-      <span id="salvos-size-label" style="font-size:12px;color:#ccc;min-width:14px;">2</span>
-      <div class="tb-sep"></div>
-      <button class="tb-btn" onclick="toggleSalvosMode()" id="salvos-mode-btn">&#128200;&nbsp;Missiles</button>
-    </div>
-  </div>
+
+    <!-- Row 2: view-specific filters -->
+    <div id="filter-row">
+
+      <!-- By Hour controls -->
+      <div id="hour-controls" style="display:flex;align-items:center;gap:6px;">
+        <select id="hour-region-select" class="tb-region-select" onchange="onHourRegion(this.value)">
+          <option value="">All regions</option>
+        </select>
+        <div class="tb-sep"></div>
+        <span style="font-size:12px;color:#555;white-space:nowrap;" id="lbl-from">From:</span>
+        <select id="hour-date-from" class="tb-region-select" onchange="onHourDateFrom(this.value)"></select>
+        <span style="font-size:12px;color:#555;">To:</span>
+        <select id="hour-date-to" class="tb-region-select" onchange="onHourDateTo(this.value)"></select>
+        <div class="tb-sep"></div>
+        <div id="type-btns" style="display:flex;gap:6px;">
+          <button class="tb-btn" id="type-pre" onclick="setTypeMode('pre')">Pre-alert</button>
+          <button class="tb-btn active" id="type-md" onclick="setTypeMode('missile_drone')">Missile &amp; Drone</button>
+        </div>
+      </div>
+
+      <!-- By Date controls -->
+      <div id="date-controls" style="display:none;align-items:center;gap:6px;">
+        <span style="font-size:12px;color:#555;white-space:nowrap;">From:</span>
+        <select id="date-view-from" class="tb-region-select" onchange="onDateViewFrom(this.value)"></select>
+        <span style="font-size:12px;color:#555;">To:</span>
+        <select id="date-view-to" class="tb-region-select" onchange="onDateViewTo(this.value)"></select>
+      </div>
+
+      <!-- Mismatch controls -->
+      <div id="mismatch-controls" style="display:none;align-items:center;gap:6px;">
+        <select id="mismatch-region-select" class="tb-region-select" onchange="onMismatchRegion(this.value)">
+          <option value="">All regions</option>
+        </select>
+        <button class="tb-btn" onclick="toggleMismatchMode()" id="mismatch-mode-btn">%&nbsp;View</button>
+      </div>
+
+      <!-- Lead Time controls -->
+      <div id="leadtime-controls" style="display:none;align-items:center;gap:6px;">
+        <select id="leadtime-region-select" class="tb-region-select" onchange="onLeadtimeRegion(this.value)">
+          <option value="">All regions</option>
+        </select>
+      </div>
+
+      <!-- Salvos controls -->
+      <div id="salvos-controls" style="display:none;align-items:center;gap:6px;">
+        <select id="salvos-region-select" class="tb-region-select" onchange="onSalvosRegion(this.value)">
+          <option value="">All regions</option>
+        </select>
+        <div class="tb-sep"></div>
+        <span style="font-size:12px;color:#555;white-space:nowrap;">From:</span>
+        <select id="salvos-date-from" class="tb-region-select" onchange="onSalvosDateFrom(this.value)"></select>
+        <span style="font-size:12px;color:#555;">To:</span>
+        <select id="salvos-date-to" class="tb-region-select" onchange="onSalvosDateTo(this.value)"></select>
+        <div class="tb-sep"></div>
+        <span style="font-size:12px;color:#555;white-space:nowrap;">Min size:</span>
+        <input type="range" id="salvos-size-slider" min="2" max="10" value="2" step="1"
+               style="width:70px;cursor:pointer;accent-color:#4455cc;"
+               oninput="onSalvosMinSize(this.value)">
+        <span id="salvos-size-label" style="font-size:12px;color:#555;min-width:14px;">2</span>
+        <div class="tb-sep"></div>
+        <button class="tb-btn" onclick="toggleSalvosMode()" id="salvos-mode-btn">&#128200;&nbsp;Missiles</button>
+      </div>
+
+    </div><!-- /filter-row -->
+  </div><!-- /topbar -->
 
   <!-- By-hour view -->
   <div id="view-hour">
     <div id="main-chart"></div>
-  </div>
-
-  <!-- Date slider (only shown in hour view) -->
-  <div id="date-mini-wrap">
-    <div id="date-mini-chart"></div>
   </div>
 
   <!-- By-date cumulative view -->
@@ -955,7 +941,6 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <!-- Mismatch view -->
   <div id="view-mismatch">
     <div id="mismatch-chart-bar"></div>
-    <div id="mismatch-chart-cum"></div>
   </div>
 
   <!-- Lead-time histogram view -->
@@ -989,8 +974,6 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
 
     var hourData            = {hour_data_js};
     var hourLayout          = {hour_layout_js};
-    var miniData            = {date_mini_data_js};
-    var miniLayout          = {date_mini_layout_js};
     var dateData            = {date_data_js};
     var dateLayout          = {date_layout_js};
     var allMismatchRecords  = {mismatch_records_js};
@@ -1041,10 +1024,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }});
 
     // ── State ───────────────────────────────────────────────────────────────
-    var isDark            = true;
+    var isDark            = false;
     var currentView       = 'hour';
     var currentDateRange  = null;          // null = all dates
-    var activeTypes       = new Set(allTypes);
+    var activeTypeMode    = 'missile_drone'; // 'pre' | 'missile_drone'
+    var hourRegion        = '';
     var salvosIsMissiles  = false;
     var salvosRegion      = '';
     var salvosDateFrom    = '';
@@ -1066,8 +1050,6 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       hourLayout.title = Object.assign({{}}, hourLayout.title, {{
         font: {{size: 12, color: '#cccccc'}},
       }});
-
-      miniLayout.margin = {{t: 4, b: 10, l: 45, r: 10}};
 
       // Date chart: shorten title (avoid rangeselector overlap), move annotation inside
       dateLayout.margin = {{t: 55, b: 110, l: 45, r: 10}};
@@ -1102,70 +1084,93 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
 
     // ── Init ─────────────────────────────────────────────────────────────────
-    Plotly.newPlot('main-chart',      hourData, hourLayout, {{responsive:true}});
-    Plotly.newPlot('date-mini-chart', miniData, miniLayout, {{responsive:true}});
-    Plotly.newPlot('date-full-chart', dateData, dateLayout, {{responsive:true}});
+    // Defer initial chart renders so Plotly has correct dimensions
+    setTimeout(function() {{
+      Plotly.newPlot('main-chart', hourData, hourLayout, {{responsive:true}});
+      Plotly.relayout('main-chart', lightMain);
+      updateHourChart();  // apply locked Y scale
+      document.getElementById('main-chart').on('plotly_click', function(d) {{
+        openSmallMultiples(d.points[0].data.name);
+      }});
+    }}, 0);
     syncTopbarHeight();
 
-    // ── Populate date selector ───────────────────────────────────────────────
+    // ── Populate By Hour date selectors ──────────────────────────────────────
     (function() {{
-      var sel = document.getElementById('date-select');
-      var dates = [...new Set(hourlyData.map(function(r) {{ return r.date_str; }}))].sort();
-      var opt0 = document.createElement('option');
-      opt0.value = ''; opt0.textContent = 'All dates';
-      sel.appendChild(opt0);
-      dates.forEach(function(d) {{
-        var opt = document.createElement('option');
-        opt.value = d; opt.textContent = d;
-        sel.appendChild(opt);
+      var allDates = [...new Set(hourlyData.map(function(r) {{ return r.date_str; }}))].sort();
+      var fromSel = document.getElementById('hour-date-from');
+      var toSel   = document.getElementById('hour-date-to');
+      var allOpt  = document.createElement('option');
+      allOpt.value = ''; allOpt.textContent = 'All';
+      fromSel.appendChild(allOpt.cloneNode(true));
+      toSel.appendChild(allOpt);
+      allDates.forEach(function(d) {{
+        var of = document.createElement('option'); of.value = d; of.textContent = d; fromSel.appendChild(of);
+        var ot = document.createElement('option'); ot.value = d; ot.textContent = d; toSel.appendChild(ot);
       }});
     }})();
 
-    function onDateSelect(val) {{
-      currentDateRange = val ? [val, val] : null;
+    // ── Populate By Hour region selector ─────────────────────────────────────
+    (function() {{
+      var sel = document.getElementById('hour-region-select');
+      var regions = [...new Set(hourlyData.map(function(r) {{ return r.group; }}))].sort();
+      regions.forEach(function(g) {{
+        var o = document.createElement('option'); o.value = g; o.textContent = g; sel.appendChild(o);
+      }});
+    }})();
+
+    // ── Populate By Date date selectors ──────────────────────────────────────
+    (function() {{
+      var allDates = [...new Set(hourlyData.map(function(r) {{ return r.date_str; }}))].sort();
+      var fromSel = document.getElementById('date-view-from');
+      var toSel   = document.getElementById('date-view-to');
+      var allOpt  = document.createElement('option');
+      allOpt.value = ''; allOpt.textContent = 'All';
+      fromSel.appendChild(allOpt.cloneNode(true));
+      toSel.appendChild(allOpt);
+      allDates.forEach(function(d) {{
+        var of = document.createElement('option'); of.value = d; of.textContent = d; fromSel.appendChild(of);
+        var ot = document.createElement('option'); ot.value = d; ot.textContent = d; toSel.appendChild(ot);
+      }});
+    }})();
+
+    function onHourDateFrom(val) {{
+      var toVal = document.getElementById('hour-date-to').value;
+      currentDateRange = (val || toVal) ? [val || '', toVal || '9999'] : null;
+      updateHourChart();
+    }}
+    function onHourDateTo(val) {{
+      var fromVal = document.getElementById('hour-date-from').value;
+      currentDateRange = (fromVal || val) ? [fromVal || '', val || '9999'] : null;
+      updateHourChart();
+    }}
+    function onHourRegion(val) {{ hourRegion = val; updateHourChart(); }}
+
+    function onDateViewFrom(val) {{
+      var toVal = document.getElementById('date-view-to').value;
+      if (val || toVal) {{
+        Plotly.relayout('date-full-chart', {{'xaxis.range': [val || '1970-01-01', toVal || '2099-12-31'], 'xaxis.autorange': false}});
+      }} else {{
+        Plotly.relayout('date-full-chart', {{'xaxis.autorange': true}});
+      }}
+    }}
+    function onDateViewTo(val) {{
+      var fromVal = document.getElementById('date-view-from').value;
+      if (fromVal || val) {{
+        Plotly.relayout('date-full-chart', {{'xaxis.range': [fromVal || '1970-01-01', val || '2099-12-31'], 'xaxis.autorange': false}});
+      }} else {{
+        Plotly.relayout('date-full-chart', {{'xaxis.autorange': true}});
+      }}
+    }}
+
+    function setTypeMode(mode) {{
+      activeTypeMode = mode;
+      document.getElementById('type-pre').classList.toggle('active', mode === 'pre');
+      document.getElementById('type-md').classList.toggle('active',  mode === 'missile_drone');
       updateHourChart();
     }}
 
-    // Build alert-type toggle buttons
-    var typeBtnsEl = document.getElementById('type-btns');
-    allTypes.forEach(function(t) {{
-      var b = document.createElement('button');
-      b.className = 'tb-btn active';
-      b.textContent = t;
-      b.dataset.type = t;
-      b.onclick = function() {{ toggleType(t, b); }};
-      typeBtnsEl.appendChild(b);
-    }});
-
-    // ── Date slider → update hour chart ────────────────────────────────────
-    document.getElementById('date-mini-chart').on('plotly_relayout', function(e) {{
-      var r0 = e['xaxis.range[0]'], r1 = e['xaxis.range[1]'];
-      if (r0 !== undefined) {{
-        currentDateRange = [r0.slice(0,10), r1.slice(0,10)];
-        // If range collapses to a single day, sync the dropdown
-        if (currentDateRange[0] === currentDateRange[1]) {{
-          document.getElementById('date-select').value = currentDateRange[0];
-        }} else {{
-          document.getElementById('date-select').value = '';
-        }}
-      }} else if (e['xaxis.autorange']) {{
-        currentDateRange = null;
-        document.getElementById('date-select').value = '';
-      }}
-      if (currentView === 'hour') updateHourChart();
-    }});
-
-    // ── Click bar/line → small-multiples modal ─────────────────────────────
-    document.getElementById('main-chart').on('plotly_click', function(d) {{
-      openSmallMultiples(d.points[0].data.name);
-    }});
-    document.getElementById('date-full-chart').on('plotly_click', function(d) {{
-      openSmallMultiples(d.points[0].data.name);
-    }});
-
     // ── View toggle ─────────────────────────────────────────────────────────
-    var dateFull_rendered = true;  // rendered on load (but hidden)
-
     function setView(v) {{
       currentView = v;
       document.getElementById('view-hour').style.display      = v === 'hour'     ? 'block' : 'none';
@@ -1173,20 +1178,16 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       document.getElementById('view-mismatch').style.display  = v === 'mismatch' ? 'block' : 'none';
       document.getElementById('view-leadtime').style.display  = v === 'leadtime' ? 'block' : 'none';
       document.getElementById('view-salvos').style.display    = v === 'salvos'   ? 'block' : 'none';
-      document.getElementById('date-mini-wrap').style.display = v === 'hour'     ? 'block' : 'none';
       document.getElementById('btn-hour').classList.toggle('active',     v === 'hour');
       document.getElementById('btn-date').classList.toggle('active',     v === 'date');
       document.getElementById('btn-mismatch').classList.toggle('active', v === 'mismatch');
       document.getElementById('btn-leadtime').classList.toggle('active', v === 'leadtime');
       document.getElementById('btn-salvos').classList.toggle('active',   v === 'salvos');
-      document.getElementById('type-label').style.display        = v === 'hour'     ? 'inline' : 'none';
-      document.getElementById('type-btns').style.display         = v === 'hour'     ? 'flex'   : 'none';
-      document.getElementById('date-select-label').style.display = v === 'hour'     ? 'inline' : 'none';
-      document.getElementById('date-select').style.display       = v === 'hour'     ? 'inline' : 'none';
-      document.getElementById('sep3').style.display              = v === 'hour'     ? 'block'  : 'none';
-      document.getElementById('mismatch-controls').style.display  = v === 'mismatch' ? 'flex'   : 'none';
-      document.getElementById('leadtime-controls').style.display  = v === 'leadtime' ? 'flex'   : 'none';
-      document.getElementById('salvos-controls').style.display    = v === 'salvos'   ? 'flex'   : 'none';
+      document.getElementById('hour-controls').style.display     = v === 'hour'     ? 'flex'  : 'none';
+      document.getElementById('date-controls').style.display     = v === 'date'     ? 'flex'  : 'none';
+      document.getElementById('mismatch-controls').style.display = v === 'mismatch' ? 'flex'  : 'none';
+      document.getElementById('leadtime-controls').style.display = v === 'leadtime' ? 'flex'  : 'none';
+      document.getElementById('salvos-controls').style.display   = v === 'salvos'   ? 'flex'  : 'none';
       // Close hamburger drawer and update its label
       document.getElementById('nav-tabs').classList.remove('open');
       var hamburgerLabel = document.getElementById('hamburger-label');
@@ -1194,32 +1195,19 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       syncTopbarHeight();
       // Force Plotly to redraw at the now-correct dimensions
       setTimeout(function() {{
-        if (v === 'date') {{ Plotly.Plots.resize('date-full-chart'); }}
-        else if (v === 'mismatch') {{
-          Plotly.Plots.resize('mismatch-chart-bar');
-          Plotly.Plots.resize('mismatch-chart-cum');
+        if (v === 'date') {{
+          Plotly.react('date-full-chart', dateData, dateLayout, {{responsive:true}});
+          Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
+        }} else if (v === 'mismatch') {{
+          buildMismatchCharts(mismatchRegion);
         }} else if (v === 'leadtime') {{
           buildLeadTimeChart(leadtimeRegion);
         }} else if (v === 'salvos') {{
           buildSalvosChart();
         }} else {{
           Plotly.Plots.resize('main-chart');
-          Plotly.Plots.resize('date-mini-chart');
         }}
       }}, 30);
-    }}
-
-    // ── Alert type toggle ────────────────────────────────────────────────────
-    function toggleType(t, btn) {{
-      if (activeTypes.has(t)) {{
-        if (activeTypes.size === 1) return;   // keep at least one
-        activeTypes.delete(t);
-        btn.classList.remove('active');
-      }} else {{
-        activeTypes.add(t);
-        btn.classList.add('active');
-      }}
-      updateHourChart();
     }}
 
     // ── Recompute hour-chart traces from filtered data ────────────────────
@@ -1227,8 +1215,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var filtered = hourlyData.filter(function(r) {{
         var dateOk = !currentDateRange ||
           (r.date_str >= currentDateRange[0] && r.date_str <= currentDateRange[1]);
-        var typeOk = activeTypes.has(r.alert_type);
-        return dateOk && typeOk;
+        var typeOk = activeTypeMode === 'pre'
+          ? r.alert_type === 'Pre-alert'
+          : r.alert_type !== 'Pre-alert';
+        var regionOk = !hourRegion || r.group === hourRegion;
+        return dateOk && typeOk && regionOk;
       }});
 
       var agg = {{}};
@@ -1247,7 +1238,16 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           hovertemplate: '<b>' + group + '</b><br>%{{x:02d}}:00 — <b>%{{y:,}}</b> alerts<extra></extra>',
         }};
       }});
-      Plotly.react('main-chart', newTraces, hourLayout);
+
+      // Lock Y-axis scale so legend clicks don't rescale
+      var maxY = 0;
+      for (var h = 0; h < 24; h++) {{
+        var s = 0; newTraces.forEach(function(t) {{ s += t.y[h] || 0; }}); maxY = Math.max(maxY, s);
+      }}
+      var lockedLayout = Object.assign({{}}, hourLayout, {{
+        yaxis: Object.assign({{}}, hourLayout.yaxis, {{autorange: false, range: [0, maxY * 1.1 || 10]}})
+      }});
+      Plotly.react('main-chart', newTraces, lockedLayout);
     }}
 
     // ── Small-multiples modal ───────────────────────────────────────────────
@@ -1255,7 +1255,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var rows = hourlyData.filter(function(r) {{
         var dateOk = !currentDateRange ||
           (r.date_str >= currentDateRange[0] && r.date_str <= currentDateRange[1]);
-        var typeOk = activeTypes.has(r.alert_type);
+        var typeOk = activeTypeMode === 'pre'
+          ? r.alert_type === 'Pre-alert'
+          : r.alert_type !== 'Pre-alert';
         return r.group === group && dateOk && typeOk;
       }});
       if (!rows.length) return;
@@ -1265,14 +1267,15 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var COLS  = window.innerWidth < 500 ? 2 : (window.innerWidth < 900 ? 4 : 7);
       var ROWS  = Math.ceil(days.length / COLS);
       var cellH = window.innerWidth < 500 ? 100 : 140;
+      var lineColor = isDark ? '#444' : '#ccc';
 
       var traces = [], layout = {{
-        grid: {{ rows: ROWS, columns: COLS, pattern: 'independent', ygap: 0.18, xgap: 0.08 }},
+        grid: {{ rows: ROWS, columns: COLS, pattern: 'independent', ygap: 0.28, xgap: 0.14 }},
         showlegend: false,
         margin: {{ t: 30, b: 10, l: 30, r: 10 }},
         height: ROWS * cellH + 40,
         paper_bgcolor: isDark ? '#12122a' : '#fff',
-        plot_bgcolor:  isDark ? '#1a1a2e' : 'white',
+        plot_bgcolor:  isDark ? '#1a1a2e' : '#f8f8fc',
         font: {{ color: isDark ? '#ccc' : '#333', size: 10, family: 'Arial' }},
       }};
 
@@ -1298,8 +1301,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           showlegend: false,
         }});
 
-        var ax = {{ showgrid:false, zeroline:false,
-                    color: isDark?'#888':'#666', tickfont:{{size:8}} }};
+        var ax = {{ showgrid: false, zeroline: false,
+                    showline: true, linecolor: lineColor, linewidth: 1, mirror: true,
+                    color: isDark?'#888':'#555', tickfont:{{size:8}} }};
         layout[xKey] = Object.assign({{}}, ax, {{
           title: {{ text: day, font: {{size:9}} }},
           tickmode:'array', tickvals:[0,6,12,18,23], ticktext:['0','6','12','18','23'],
@@ -1447,13 +1451,16 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         ? {{bg:'#1a1a2e', paper:'#0f0f1a', grid:'#2a2a3e', text:'#cccccc', roll:'#ffffff', legendBg:'rgba(26,26,46,0.85)',    legendBorder:'#444'}}
         : {{bg:'white',   paper:'#fafafa', grid:'#e0e0e0', text:'#333333', roll:'#555555', legendBg:'rgba(255,255,255,0.85)', legendBorder:'#ccc'}};
 
+      var viewEl = document.getElementById('view-mismatch');
+      var viewH  = viewEl.offsetHeight || (window.innerHeight - 74);
+      var viewW  = viewEl.offsetWidth  || window.innerWidth;
+
       if (!dates.length) {{
         var empty = {{plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
-                     font:{{color:theme.text}},
+                     font:{{color:theme.text}}, height:viewH, width:viewW,
                      title:{{text:'No data for selected region', x:0.5,
                              font:{{color:theme.text}}}}}};
-        Plotly.react('mismatch-chart-bar', [], empty);
-        Plotly.react('mismatch-chart-cum', [], empty);
+        Plotly.react('mismatch-chart-bar', [], empty, {{responsive:true}});
         return;
       }}
 
@@ -1493,15 +1500,19 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
             : '<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: <b>%{{y:,}}</b><extra></extra>',
         }};
       }});
-      barTraces.push({{
-        type:'scatter', x:dates, y:rollRate, name:'7d mismatch %', yaxis:'y2',
-        line:{{color:theme.roll, width:2, dash:'dot'}}, mode:'lines',
-        hovertemplate:'7d mismatch rate: <b>%{{y:.1f}}%</b><extra></extra>',
-      }});
+      if (mismatchIsPct) {{
+        barTraces.push({{
+          type:'scatter', x:dates, y:rollRate, name:'7d mismatch %', yaxis:'y2',
+          line:{{color:theme.roll, width:2, dash:'dot'}}, mode:'lines',
+          hovertemplate:'7d mismatch rate: <b>%{{y:.1f}}%</b><extra></extra>',
+        }});
+      }}
 
       var regionLabel = region ? ' — ' + region : ' — All Regions';
       var barLayout = {{
         barmode:'stack',
+        height: viewH,
+        width:  viewW,
         title:{{text:'Mismatch by Day'+regionLabel+'<br><sup>15-min pairing · 7-day mismatch % (dotted) on right axis</sup>',
                 x:0.5, font:{{size:isMobile()?11:14,color:theme.text}}}},
         yaxis:{{title:mismatchIsPct?'% of Events':'Event Count',
@@ -1519,17 +1530,12 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         margin: isMobile()
           ? {{t:55, b:110, l:45, r:45}}
           : {{t:70, b:60,  l:70, r:70}},
-        xaxis: Object.assign({{showgrid:true, gridcolor:theme.grid, color:theme.text, zeroline:false,
-                rangeslider:{{visible:true, thickness:0.05}},
-                rangeselector:{{
-                  buttons:[
-                    {{count:7,label:'1w',step:'day',stepmode:'backward'}},
-                    {{count:14,label:'2w',step:'day',stepmode:'backward'}},
-                    {{step:'all',label:'All'}},
-                  ],
-                  bgcolor:'#252540', activecolor:'#444470', font:{{color:'#cccccc'}},
-                }}}},
-          isMobile() ? {{range:[dates[0],dates[dates.length-1]]}} : {{}}),
+        xaxis: {{
+          showgrid: true, gridcolor: theme.grid, color: theme.text, zeroline: false,
+          tickvals: dates,
+          ticktext: dates.map(function(d) {{ return d.slice(5); }}),
+          tickangle: -45, tickfont: {{size: 8}},
+        }},
         annotations: partialDay ? [isMobile()
           ? {{xref:'paper', yref:'paper', x:0.99, xanchor:'right', y:0.98, yanchor:'top',
               text:'\u26a0 partial: '+partialDay,
@@ -1540,43 +1546,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         ] : [],
       }};
 
-      // Cumulative traces
-      var cumTraces = EVT_ORDER.map(function(et) {{
-        var cum = 0;
-        var cumY = daily[et].map(function(v) {{ cum += v; return cum; }});
-        return {{
-          type:'scatter', x:dates, y:cumY, name:EVT_LABELS[et],
-          line:{{color:EVT_COLORS[et], width:2.5}},
-          mode:'lines+markers', marker:{{size:4, color:EVT_COLORS[et]}},
-          hovertemplate:'<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: cumulative <b>%{{y:,}}</b><extra></extra>',
-        }};
-      }});
-      var cumLayout = {{
-        title:{{text:'Cumulative'+regionLabel, x:0.5, font:{{size:14,color:theme.text}}}},
-        xaxis: Object.assign({{showgrid:true, gridcolor:theme.grid, color:theme.text, zeroline:false,
-                rangeslider:{{visible:true, thickness:0.05}}}},
-          isMobile() ? {{range:[dates[0],dates[dates.length-1]]}} : {{}}),
-        yaxis:{{title:'Cumulative Events', showgrid:true, gridcolor:theme.grid,
-                zeroline:false, color:theme.text}},
-        hovermode:'x unified',
-        showlegend: !isMobile(),   /* legend already shown on bar chart above */
-        plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
-        font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
-        legend:{{font:{{size:11,color:theme.text}},
-                 bgcolor:theme.legendBg, bordercolor:theme.legendBorder, borderwidth:1}},
-        margin: isMobile()
-          ? {{t:30, b:20, l:45, r:10}}
-          : {{t:50, b:60, l:70, r:40}},
-        annotations: (partialDay && !isMobile()) ? [{{
-          x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
-          text: '\u26a0 ' + partialDay + ': partial day (data to ' + partialHour + ':xx)',
-          showarrow: false, font: {{size: 10, color: '#ffaa44'}},
-          xanchor: 'center',
-        }}] : [],
-      }};
-
       Plotly.react('mismatch-chart-bar', barTraces, barLayout, {{responsive:true}});
-      Plotly.react('mismatch-chart-cum', cumTraces, cumLayout, {{responsive:true}});
     }}
 
     // ── Lead-time histogram ──────────────────────────────────────────────────
@@ -1698,12 +1668,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     function buildSalvosChart() {{
       var yKey   = salvosIsMissiles ? 'total_missiles' : 'cluster_count';
       var yLabel = salvosIsMissiles ? 'Total Missiles in Salvos' : 'Salvo Clusters';
-
-      var colorscale = isDark
-        ? [[0,'#0f0f1a'],[0.001,'#3d1515'],[0.25,'#7f0000'],[0.5,'#c0392b'],[0.75,'#e74c3c'],[1,'#ff8c00']]
-        : [[0,'#f5f5f5'],[0.001,'#fee0d2'],[0.25,'#fc9272'],[0.5,'#fb6a4a'],[0.75,'#cb181d'],[1,'#67000d']];
       var textColor = isDark ? '#cccccc' : '#333333';
+      var gridColor = isDark ? '#2a2a3e' : '#e0e0e0';
       var paperBg   = isDark ? '#0f0f1a' : '#fafafa';
+      var plotBg    = isDark ? '#1a1a2e' : 'white';
+      var lineColor = '#4455cc';
 
       // Apply filters to individual cluster records
       var filtered = allSalvoRecords.filter(function(r) {{
@@ -1713,117 +1682,75 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           && (!salvosDateTo   || r.date_str <= salvosDateTo);
       }});
 
-      // Aggregate filtered records to (group, date_str)
-      var aggMap = {{}};
+      // Aggregate by date (sum across all matching regions)
+      var dateAgg = {{}};
       filtered.forEach(function(r) {{
-        var key = r.group + '|' + r.date_str;
-        if (!aggMap[key]) aggMap[key] = {{group: r.group, date_str: r.date_str, cluster_count: 0, total_missiles: 0}};
-        aggMap[key].cluster_count++;
-        aggMap[key].total_missiles += r.cluster_size;
+        if (!dateAgg[r.date_str]) dateAgg[r.date_str] = {{cluster_count: 0, total_missiles: 0}};
+        dateAgg[r.date_str].cluster_count++;
+        dateAgg[r.date_str].total_missiles += r.cluster_size;
       }});
-      var records = Object.keys(aggMap).map(function(k) {{
-        var a = aggMap[k];
-        a.avg_size = Math.round(a.total_missiles / a.cluster_count * 10) / 10;
-        return a;
-      }});
+      var dates = Object.keys(dateAgg).sort();
+      var ys    = dates.map(function(d) {{ return dateAgg[d][yKey]; }});
 
-      if (!records.length) {{
+      if (!dates.length) {{
         Plotly.react('salvos-chart', [], {{
-          paper_bgcolor: paperBg, font: {{color: textColor}},
+          paper_bgcolor: paperBg, plot_bgcolor: plotBg, font: {{color: textColor}},
           title: {{text: 'No salvo data for selected filters', x: 0.5, font: {{color: textColor}}}},
         }}, {{responsive: true}});
         return;
       }}
 
-      // Build dimension arrays and lookup
-      var dateSet = {{}}, regionSet = {{}};
-      records.forEach(function(r) {{
-        dateSet[r.date_str] = true;
-        regionSet[r.group]  = true;
-      }});
-      var dates   = Object.keys(dateSet).sort();
-      var regions = Object.keys(regionSet).sort();
-
-      var lookup = {{}};
-      records.forEach(function(r) {{
-        if (!lookup[r.group]) lookup[r.group] = {{}};
-        lookup[r.group][r.date_str] = r;
-      }});
-
-      // Build Z matrix and hover text
-      var z    = regions.map(function(reg) {{
-        return dates.map(function(d) {{
-          var rec = lookup[reg] && lookup[reg][d];
-          return rec ? rec[yKey] : null;
-        }});
-      }});
-      var text = regions.map(function(reg) {{
-        return dates.map(function(d) {{
-          var rec = lookup[reg] && lookup[reg][d];
-          if (!rec) return reg + '<br>' + d + '<br>No salvos';
-          return '<b>' + reg + '</b><br>' + d +
-            '<br>Clusters: <b>' + rec.cluster_count + '</b>' +
-            '<br>Missiles: <b>' + rec.total_missiles + '</b>' +
-            '<br>Avg size: <b>' + rec.avg_size + '</b>';
-        }});
-      }});
-
-      var trace = {{
-        type: 'heatmap',
-        x: dates,
-        y: regions,
-        z: z,
-        text: text,
-        hoverinfo: 'text',
-        colorscale: colorscale,
-        zmin: 0,
-        xgap: 1, ygap: 2,
-        colorbar: {{
-          title: {{text: yLabel, side: 'right', font: {{color: textColor, size: 11}}}},
-          thickness: 14,
-          tickfont: {{color: textColor, size: 10}},
-          outlinecolor: textColor,
-          outlinewidth: 0.5,
-        }},
-      }};
-
       var sizeNote = salvosMinSize > 2 ? ' \u00b7 min size \u2265' + salvosMinSize : '';
+      var regionNote = salvosRegion ? ' \u00b7 ' + salvosRegion : '';
       var annotations = partialDay ? [{{
-        x: partialDay, y: -0.12, xref: 'x', yref: 'paper',
+        x: partialDay, y: 1.06, xref: 'x', yref: 'paper',
         text: '\u26a0 partial', showarrow: false,
         font: {{size: 9, color: '#ffaa44'}}, xanchor: 'center',
       }}] : [];
 
       var viewEl = document.getElementById('view-salvos');
-      var viewH  = viewEl.offsetHeight || (window.innerHeight - 46);
+      var viewH  = viewEl.offsetHeight || (window.innerHeight - 74);
       var viewW  = viewEl.offsetWidth  || window.innerWidth;
+
+      var trace = {{
+        type: 'scatter',
+        x: dates,
+        y: ys,
+        mode: 'lines+markers',
+        line: {{shape: 'spline', smoothing: 1.3, color: lineColor, width: 2.5}},
+        marker: {{size: 6, color: lineColor, opacity: 0.8}},
+        hovertemplate: '<b>%{{x}}</b><br>' + yLabel + ': <b>%{{y}}</b><extra></extra>',
+      }};
 
       var layout = {{
         height: viewH,
         width:  viewW,
         title: {{
-          text: 'Salvo Intensity by Region & Day' +
-                '<br><sup>Color = ' + yLabel +
-                ' \u00b7 salvo = 2+ missile alerts, gap \u226430 min' + sizeNote + '</sup>',
+          text: 'Salvo Concentration over Time' + regionNote +
+                '<br><sup>' + yLabel + ' per day \u00b7 spline-smoothed' +
+                ' \u00b7 salvo = 2+ missiles, gap \u226430 min' + sizeNote + '</sup>',
           x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
           type: 'category',
-          tickangle: -55,
+          tickvals: dates,
+          ticktext: dates.map(function(d) {{ return d.slice(5); }}),
+          tickangle: -45,
           tickfont: {{size: 9, color: textColor}},
           color: textColor,
-          showgrid: false,
+          showgrid: true, gridcolor: gridColor,
         }},
         yaxis: {{
-          automargin: true,
-          tickfont: {{size: isMobile() ? 9 : 11, color: textColor}},
+          title: yLabel,
+          showgrid: true, gridcolor: gridColor,
+          zeroline: true, zerolinecolor: gridColor,
+          tickfont: {{size: 10, color: textColor}},
           color: textColor,
-          showgrid: false,
         }},
-        plot_bgcolor:  paperBg,
+        plot_bgcolor:  plotBg,
         paper_bgcolor: paperBg,
         font: {{family: 'Arial, Helvetica, sans-serif', color: textColor}},
-        margin: chartMargins({{t:80,b:90,l:145,r:80}}, {{t:40,b:55,l:80,r:20}}),
+        margin: chartMargins({{t:80,b:80,l:70,r:40}}, {{t:55,b:60,l:50,r:15}}),
         annotations: annotations,
       }};
 
@@ -1833,17 +1760,18 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     // ── Dark / light toggle ─────────────────────────────────────────────────
     function toggleTheme() {{
       isDark = !isDark;
+      document.body.classList.toggle('dark',  isDark);
       document.body.classList.toggle('light', !isDark);
       document.getElementById('theme-btn').innerHTML =
         isDark ? '&#9728;&#65039;&nbsp;Light' : '&#127769;&nbsp;Dark';
-      Plotly.relayout('main-chart',      isDark ? darkMain : lightMain);
-      Plotly.relayout('date-mini-chart', isDark ? darkMini : lightMini);
-      Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
+      Plotly.relayout('main-chart', isDark ? darkMain : lightMain);
+      var dateEl = document.getElementById('date-full-chart');
+      if (dateEl && dateEl._fullLayout) {{
+        Plotly.relayout('date-full-chart', isDark ? darkMain : lightMain);
+      }}
       buildMismatchCharts(mismatchRegion);
       buildLeadTimeChart(leadtimeRegion);
       buildSalvosChart();
-      document.getElementById('date-mini-wrap').style.background =
-        isDark ? '#0f0f1a' : '#fafafa';
     }}
   </script>
 </body>
@@ -1937,7 +1865,10 @@ def main() -> None:
     else:
         print("  No salvo clusters found.")
 
-    # 6. Chart
+    # 6. Save processed data (enables fast style-only reruns via build_chart.py)
+    save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour)
+
+    # 7. Chart
     build_chart(chart_df, mismatch_df, salvo_df=salvo_df,
                 partial_day=partial_day, partial_hour=partial_hour)
     print("\nDone.  Open output/index.html in your browser.")
