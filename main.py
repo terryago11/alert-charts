@@ -1798,7 +1798,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           type: 'scatter', mode: 'lines+markers',
           name: date.slice(5),
           x: hours24, y: ys,
-          line:   {{color: color, width: 1.8}},
+          line:   {{color: color, width: 1.8, shape: 'spline', smoothing: 1.2}},
           marker: {{size: 5, color: color}},
           hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> missiles<extra></extra>',
         }};
