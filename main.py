@@ -452,15 +452,36 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
 # ── Situation Room ─────────────────────────────────────────────────────────────
 
 def compute_situation(chart_df: pd.DataFrame) -> dict:
-    """Return last-night and today alert summaries for the Situation Room tab."""
-    now   = datetime.now()
-    today = now.date()
-    yest  = today - timedelta(days=1)
+    """Return last-night and today alert summaries for the Situation Room tab.
 
-    ln_start = datetime(yest.year,  yest.month,  yest.day,  NIGHT_START)  # 22:00 yesterday
-    ln_end   = datetime(today.year, today.month, today.day, NIGHT_END)    # 06:00 today
+    Time windows are anchored to the latest date present in the data, not the
+    system clock — so a data source that lags by one day still shows the most
+    recently completed night and day rather than an empty window.
+    """
+    now = datetime.now()
+
+    # Anchor to the latest date actually in the data
+    latest_date_str = chart_df["date_str"].dropna().max()
+    latest_date     = date.fromisoformat(latest_date_str)
+    prev_date       = latest_date - timedelta(days=1)
+
+    ln_start = datetime(prev_date.year,   prev_date.month,   prev_date.day,   NIGHT_START)
+    ln_end   = datetime(latest_date.year, latest_date.month, latest_date.day, NIGHT_END)
     td_start = ln_end
-    td_end   = now
+
+    def fmt(d: date) -> str:
+        return d.strftime("%-d %b")
+
+    ln_label = f"{NIGHT_START}:00 {fmt(prev_date)} \u2192 {NIGHT_END:02d}:00 {fmt(latest_date)}"
+
+    # If the latest data date is real-today, cap "today" at now; otherwise at end of that day
+    real_today = now.date()
+    if latest_date == real_today:
+        td_end      = now
+        today_label = f"{NIGHT_END:02d}:00 today \u2192 now ({now.strftime('%H:%M')})"
+    else:
+        td_end      = datetime(latest_date.year, latest_date.month, latest_date.day, 23, 59, 59)
+        today_label = f"{NIGHT_END:02d}:00 {fmt(latest_date)} \u2192 end of day"
 
     def period_stats(start_dt: datetime, end_dt: datetime, label: str) -> dict:
         def row_in_range(row) -> bool:
@@ -500,14 +521,8 @@ def compute_situation(chart_df: pd.DataFrame) -> dict:
         }
 
     return {
-        "last_night": period_stats(
-            ln_start, ln_end,
-            f"{NIGHT_START}:00 yesterday \u2192 {NIGHT_END:02d}:00 today"
-        ),
-        "today": period_stats(
-            td_start, td_end,
-            f"{NIGHT_END:02d}:00 today \u2192 now ({now.strftime('%H:%M')})"
-        ),
+        "last_night": period_stats(ln_start, ln_end, ln_label),
+        "today":      period_stats(td_start, td_end, today_label),
     }
 
 
