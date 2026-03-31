@@ -388,11 +388,12 @@ def mismatch_daily_data(mismatch_df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     """
-    Detect salvo clusters: groups of >= 2 Missile alerts to the same zone
-    where the gap between every consecutive pair is <= SALVO_WINDOW.
+    Count all Missile alerts per (zone, date, hour), after deduplicating
+    same-minute hits per zone (consistent with aggregate()).
 
     Returns DataFrame: [zone, group, date_str, cluster_start, cluster_size]
-    where cluster_size >= 2.
+    where cluster_start is the ISO timestamp of the first missile in that
+    zone-date-hour and cluster_size is the missile count.
     """
     zone_times: dict = defaultdict(list)
     for _, row in df.iterrows():
@@ -411,37 +412,21 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     rows = []
     for zone, times in zone_times.items():
         group        = ZONE_GROUP.get(zone, "Other")
-        sorted_times = sorted(set(times))   # dedup same-minute hits
+        deduped      = sorted(set(times))   # dedup same-minute hits
 
-        if len(sorted_times) < 2:
-            continue
+        # Group by (date, hour) and count
+        hour_counts: dict = defaultdict(list)
+        for dt in deduped:
+            key = (dt.strftime("%Y-%m-%d"), dt.hour)
+            hour_counts[key].append(dt)
 
-        cluster_start = sorted_times[0]
-        cluster_count = 1
-
-        for i in range(1, len(sorted_times)):
-            gap = sorted_times[i] - sorted_times[i - 1]
-            if gap <= SALVO_WINDOW:
-                cluster_count += 1
-            else:
-                if cluster_count >= 2:
-                    rows.append({
-                        "zone":          zone,
-                        "group":         group,
-                        "date_str":      cluster_start.strftime("%Y-%m-%d"),
-                        "cluster_start": cluster_start.isoformat(),
-                        "cluster_size":  cluster_count,
-                    })
-                cluster_start = sorted_times[i]
-                cluster_count = 1
-
-        if cluster_count >= 2:
+        for (date_str, _hour), hour_times in hour_counts.items():
             rows.append({
                 "zone":          zone,
                 "group":         group,
-                "date_str":      cluster_start.strftime("%Y-%m-%d"),
-                "cluster_start": cluster_start.isoformat(),
-                "cluster_size":  cluster_count,
+                "date_str":      date_str,
+                "cluster_start": hour_times[0].isoformat(),
+                "cluster_size":  len(hour_times),
             })
 
     if rows:
@@ -1852,8 +1837,8 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var layout = {{
         height: viewH, width: viewW,
         title: {{
-          text: 'Missile Salvo Activity by Hour of Day' + regionNote +
-                '<br><sup>Missiles per hour \u00b7 one line per day \u00b7 salvo\u202f=\u202f2+ missiles gap\u202f\u226430\u202fmin</sup>',
+          text: 'Missile Activity by Hour of Day' + regionNote +
+                '<br><sup>All missiles per hour \u00b7 one line per day</sup>',
           x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
@@ -1866,7 +1851,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
           zeroline: false, color: textColor,
         }},
         yaxis: {{
-          title: 'Missiles in Salvos',
+          title: 'Missiles',
           showgrid: true, gridcolor: gridColor,
           zeroline: true, zerolinecolor: gridColor,
           color: textColor,
