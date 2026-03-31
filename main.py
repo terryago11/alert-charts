@@ -507,7 +507,7 @@ def compute_situation(chart_df: pd.DataFrame) -> dict:
         ),
         "today": period_stats(
             td_start, td_end,
-            f"{NIGHT_END:02d}:00 today \u2192 now ({now.strftime('%H:%M')} UTC)"
+            f"{NIGHT_END:02d}:00 today \u2192 now"
         ),
     }
 
@@ -919,9 +919,25 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       #nav-tabs.open {{ display: flex; }}
       #nav-tabs .tb-btn {{
         text-align: left; padding: 9px 14px;
-        font-size: 13px; border-radius: 8px;
-        border: 1px solid transparent; top: 0;
+        font-size: 13px;
+        /* Drawer items: flat rows with left accent, not tab or pill */
+        border-radius: 0; border: none;
+        border-left: 3px solid transparent;
+        top: 0; background: transparent; color: #555;
       }}
+      #nav-tabs .tb-btn:hover {{
+        background: rgba(68,85,204,0.07);
+        border-left-color: #aab;
+        color: #222;
+      }}
+      #nav-tabs .tb-btn.active {{
+        background: rgba(68,85,204,0.10);
+        border-left: 3px solid #4455cc;
+        color: #4455cc;
+      }}
+      body.dark #nav-tabs .tb-btn {{ color: #888; background: transparent; border-left-color: transparent; }}
+      body.dark #nav-tabs .tb-btn:hover {{ background: rgba(68,85,204,0.15); color: #ccc; border-left-color: #555; }}
+      body.dark #nav-tabs .tb-btn.active {{ background: rgba(68,85,204,0.20); border-left-color: #7788ee; color: #7788ee; }}
       #nav-tabs > #sep {{ display: none; }}
 
       /* Hide desktop-only separators */
@@ -1879,16 +1895,24 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
                        ' at ' + fd.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
         }} catch(e) {{ fetchedStr = fetchedAt; }}
       }}
-      // Compute next 06:00 UTC update
+      // Compute next update time — runs at 03, 09, 15, 21 UTC
       var nextUpdateStr = '';
       try {{
-        var now = new Date();
-        var next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 6, 0, 0));
-        if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-        var diffH = (next - now) / 3600000;
+        var now      = new Date();
+        var runHours = [3, 9, 15, 21];
+        var nowUTCm  = now.getUTCHours() * 60 + now.getUTCMinutes();
+        var nextH    = runHours.find(function(h) {{ return h * 60 > nowUTCm; }});
+        var next;
+        if (nextH !== undefined) {{
+          next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH, 0, 0));
+        }} else {{
+          // Past 21:00 UTC — next is 03:00 UTC tomorrow
+          next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 3, 0, 0));
+        }}
+        var diffH     = (next - now) / 3600000;
         var hoursLeft = Math.floor(diffH);
         var minsLeft  = Math.round((diffH - hoursLeft) * 60);
-        var nextIL = next.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
+        var nextIL    = next.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
         nextUpdateStr = 'Next update in ~' + hoursLeft + 'h ' + minsLeft + 'm (' + nextIL + ' Israel time)';
       }} catch(e) {{}}
       var html = fetchedStr
@@ -1900,7 +1924,12 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         if (!d) return;
         html += '<div class="sit-section">';
         html += '<div class="sit-section-title">' + titles[key] + '</div>';
-        html += '<div class="sit-sublabel">' + (d.label || '') + '</div>';
+        var sublabel = d.label || '';
+        if (key === 'today' && sublabel) {{
+          var nowIL = new Date().toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
+          sublabel += ' (' + nowIL + ' Israel time)';
+        }}
+        html += '<div class="sit-sublabel">' + sublabel + '</div>';
 
         if (!d.total_missile && !d.total_pre && !d.total_drone) {{
           html += '<div class="sit-summary sit-quiet">Quiet \u2014 no alerts recorded for this period.</div>';
