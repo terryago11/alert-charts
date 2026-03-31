@@ -4,7 +4,7 @@
 
 Fetches Israeli Homefront Command (IDF/oref.org.il) alert history, maps each
 alert city to its official HFC zone, and generates a self-contained interactive
-HTML dashboard at `output/ira_alerts.html`.
+HTML dashboard at `output/index.html`.
 
 ## Stack
 
@@ -71,9 +71,17 @@ the same zone fire at the same minute, that counts as **one event**.
 `compute_situation(chart_df)` computes time-bounded summaries for the Situation Room tab:
 - **Last night**: 22:00 yesterday → 06:00 today (uses `NIGHT_START`/`NIGHT_END`)
 - **Today**: 06:00 today → now
-- For each period: totals by alert type, list of affected regions, per-region 24-element hourly count array
+- For each period: totals by alert type and list of affected regions
 - Called fresh on every run (not cached in `processed.json`) since it depends on `datetime.now()`
 - `build_chart.py` also calls it after loading `chart_df` from `processed.json`
+- Times displayed in `Asia/Jerusalem` (Israel time) via JS `toLocaleString`
+- `fetched_at` is stored as a UTC ISO string in `processed.json` and converted to Israel time in JS
+
+#### Timeline list (JS `buildTimelineHTML`)
+- Iterates every `(date_str, hour)` pair in the window, filters `hourlyData`, aggregates counts
+- Renders one `.sit-tl-row` per active hour: time label | emoji-badge counts | coloured region dots
+- Each row stores its data in `data-ds`, `data-h`, `data-sect` attributes (avoids Python f-string backslash-escaping issues with inline onclick strings)
+- Clicking opens `openHourModal()` — a Plotly stacked-bar popup breaking down alerts by region for that hour; reuses the existing `#modal-backdrop` / `#modal-chart` infrastructure
 
 ## File map
 
@@ -88,7 +96,7 @@ the same zone fire at the same minute, that counts as **one event**.
 
 ## Dashboard tabs
 
-1. **Situation Room** *(default)* — verbal + sparkline summary of last night and today; built by `compute_situation()` + `buildSituationView()` JS
+1. **Situation Room** *(default)* — per-hour timeline list for last night and today; emoji badges (🚀 missile, ⚡ pre-alert, 🛩 drone) + coloured region dots per row; click any row for a region-breakdown popup bar chart; fetched-at timestamp and next-update countdown at bottom; built by `compute_situation()` + `buildSituationView()` / `buildTimelineHTML()` / `openHourModal()` JS
 2. **By Hour** — stacked bar, X=hour 0–23, Y=alert count; date-range slider + alert-type toggles
 3. **By Date** — cumulative line chart per region; range selector buttons
 4. **Mismatches** — stacked bar per day: paired / pre-alert only / missile only; toggle Abs / % view
@@ -108,5 +116,9 @@ the same zone fire at the same minute, that counts as **one event**.
 - Nav tab style: `#nav-tabs .tb-btn` overrides the base `.tb-btn` pill style with browser-tab
   appearance (transparent background, 2px bottom-border highlight on active). The hamburger
   and theme-toggle buttons are outside `#nav-tabs` and are unaffected.
-- The Situation Room view is non-Plotly (pure HTML/SVG), so it does not need the deferred
+- The Situation Room view is non-Plotly (pure HTML), so it does not need the deferred
   resize trick — `buildSituationView()` can be called directly.
+- Avoid inline onclick string literals that embed JS-escaped quotes inside a Python f-string
+  template: Python collapses `\'` → `'`, producing adjacent string literals and a JS syntax
+  error. Use `data-*` attributes on the element and read them via `this.dataset.*` in the
+  onclick handler instead.

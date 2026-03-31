@@ -4,17 +4,24 @@
 
 An open-source interactive dashboard for analysing Israeli Homefront Command (oref.org.il) alert history during Operation Roaring Lion. Tracks rocket, drone, and pre-warning alerts across all HFC zones — visualising patterns by time of day, region, salvo intensity, and pre-alert effectiveness.
 
-Data is fetched automatically from a public archive and refreshed daily. No server required — the output is a single self-contained HTML file.
+Data is fetched automatically from a public archive and refreshed 4× daily. No server required — the output is a single self-contained HTML file.
 
 ## What it shows
 
 ### ⚡ Situation Room *(default view)*
-At-a-glance summary of recent activity, updated each time you run the script.
+At-a-glance timeline of recent activity, refreshed 4× daily (06:00 / 12:00 / 18:00 / 00:00 Israel time).
 
 - **What happened last night?** — 22:00 yesterday → 06:00 today
-- **What's happening today?** — 06:00 → now
+- **What's happening today?** — 06:00 → now (Israel time)
 
-Each section shows a verbal summary ("X missile alerts across N regions") and per-region sparklines with night hours highlighted.
+Each section shows a scrollable list of active hours. Every row displays:
+- **Time** (e.g. 05:00)
+- **Alert counts** as emoji badges — 🚀 missile, ⚡ pre-alert, 🛩 drone
+- **Coloured dots** for each affected region
+
+Click any row to open a **region breakdown popup** — a stacked bar chart showing how alerts were distributed across regions for that hour.
+
+A footer line shows when data was last fetched and when the next automatic update is scheduled (Israel time).
 
 ### By Hour
 Stacked bar chart of alert counts per hour of day (0–23), broken down by region.
