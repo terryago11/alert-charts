@@ -515,7 +515,8 @@ def compute_situation(chart_df: pd.DataFrame) -> dict:
 
 def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
                    salvo_df: Optional[pd.DataFrame],
-                   partial_day: Optional[str], partial_hour: Optional[int]) -> None:
+                   partial_day: Optional[str], partial_hour: Optional[int],
+                   fetched_at: Optional[str] = None) -> None:
     """Serialise aggregated data to data/processed.json for use by build_chart.py."""
     DATA_DIR.mkdir(exist_ok=True)
     payload = {
@@ -524,6 +525,7 @@ def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
         "salvo_df":    salvo_df.to_dict(orient="records")    if salvo_df    is not None else [],
         "partial_day":  partial_day,
         "partial_hour": partial_hour,
+        "fetched_at":   fetched_at or datetime.now().isoformat(),
     }
     path = DATA_DIR / "processed.json"
     path.write_text(json.dumps(payload, default=str), encoding="utf-8")
@@ -535,7 +537,8 @@ def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
 def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None,
                 salvo_df: Optional[pd.DataFrame] = None,
                 partial_day: Optional[str] = None, partial_hour: Optional[int] = None,
-                situation_data: Optional[dict] = None) -> None:
+                situation_data: Optional[dict] = None,
+                fetched_at: Optional[str] = None) -> None:
     """
     Full-screen interactive chart with three views toggled by a tab bar:
 
@@ -723,6 +726,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     alert_types_js  = json.dumps(alert_types)
     partial_day_js  = json.dumps(partial_day)
     partial_hour_js = json.dumps(partial_hour)
+    fetched_at_js   = json.dumps(fetched_at or datetime.now().isoformat())
 
     dark_main  = json.dumps({"plot_bgcolor": "#1a1a2e", "paper_bgcolor": "#0f0f1a",
                               "font.color": "#cccccc", "title.font.color": "#cccccc",
@@ -1081,6 +1085,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     var situationData       = {situation_data_js};
     var partialDay          = {partial_day_js};
     var partialHour         = {partial_hour_js};
+    var fetchedAt           = {fetched_at_js};
 
     var darkMain    = {dark_main};
     var lightMain   = {light_main};
@@ -1863,7 +1868,18 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var el = document.getElementById('situation-content');
       if (!el) return;
       var titles = {{ last_night: 'What happened last night?', today: 'What\u2019s happening today?' }};
-      var html = '';
+      // Format fetchedAt timestamp
+      var fetchedStr = '';
+      if (fetchedAt) {{
+        try {{
+          var d = new Date(fetchedAt);
+          fetchedStr = d.toLocaleDateString(undefined, {{day:'numeric',month:'short',year:'numeric'}}) +
+                       ' at ' + d.toLocaleTimeString(undefined, {{hour:'2-digit',minute:'2-digit'}});
+        }} catch(e) {{ fetchedStr = fetchedAt; }}
+      }}
+      var html = fetchedStr
+        ? '<div style="font-size:11px;color:#999;margin-bottom:18px;">Data last fetched: ' + fetchedStr + '</div>'
+        : '';
 
       ['last_night', 'today'].forEach(function(key) {{
         var d = situationData[key];
@@ -2012,7 +2028,9 @@ def main() -> None:
         print("  No salvo clusters found.")
 
     # 6. Save processed data (enables fast style-only reruns via build_chart.py)
-    save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour)
+    fetched_at = datetime.now().isoformat()
+    save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour,
+                   fetched_at=fetched_at)
 
     # 7. Situation Room summary (time-sensitive, computed fresh each run)
     situation_data = compute_situation(chart_df)
@@ -2020,7 +2038,7 @@ def main() -> None:
     # 8. Chart
     build_chart(chart_df, mismatch_df, salvo_df=salvo_df,
                 partial_day=partial_day, partial_hour=partial_hour,
-                situation_data=situation_data)
+                situation_data=situation_data, fetched_at=fetched_at)
     print("\nDone.  Open output/index.html in your browser.")
 
 

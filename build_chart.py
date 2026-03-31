@@ -34,16 +34,18 @@ def main() -> None:
     salvo_df     = pd.DataFrame(payload["salvo_df"])    if payload.get("salvo_df")    else pd.DataFrame()
     partial_day  = payload.get("partial_day")
     partial_hour = payload.get("partial_hour")
+    fetched_at   = payload.get("fetched_at")
 
     situation_data = compute_situation(chart_df)
 
     build_chart(
         chart_df,
         mismatch_df  if not mismatch_df.empty  else None,
-        salvo_df      = salvo_df if not salvo_df.empty else None,
-        partial_day   = partial_day,
-        partial_hour  = partial_hour,
+        salvo_df       = salvo_df if not salvo_df.empty else None,
+        partial_day    = partial_day,
+        partial_hour   = partial_hour,
         situation_data = situation_data,
+        fetched_at     = fetched_at,
     )
 
 
