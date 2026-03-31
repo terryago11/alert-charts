@@ -452,36 +452,16 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
 # ── Situation Room ─────────────────────────────────────────────────────────────
 
 def compute_situation(chart_df: pd.DataFrame) -> dict:
-    """Return last-night and today alert summaries for the Situation Room tab.
+    """Return last-night and today alert summaries for the Situation Room tab."""
+    from datetime import timezone
+    now   = datetime.now(timezone.utc)
+    today = now.date()
+    yest  = today - timedelta(days=1)
 
-    Time windows are anchored to the latest date present in the data, not the
-    system clock — so a data source that lags by one day still shows the most
-    recently completed night and day rather than an empty window.
-    """
-    now = datetime.now()
-
-    # Anchor to the latest date actually in the data
-    latest_date_str = chart_df["date_str"].dropna().max()
-    latest_date     = date.fromisoformat(latest_date_str)
-    prev_date       = latest_date - timedelta(days=1)
-
-    ln_start = datetime(prev_date.year,   prev_date.month,   prev_date.day,   NIGHT_START)
-    ln_end   = datetime(latest_date.year, latest_date.month, latest_date.day, NIGHT_END)
+    ln_start = datetime(yest.year,  yest.month,  yest.day,  NIGHT_START)
+    ln_end   = datetime(today.year, today.month, today.day, NIGHT_END)
     td_start = ln_end
-
-    def fmt(d: date) -> str:
-        return d.strftime("%-d %b")
-
-    ln_label = f"{NIGHT_START}:00 {fmt(prev_date)} \u2192 {NIGHT_END:02d}:00 {fmt(latest_date)}"
-
-    # If the latest data date is real-today, cap "today" at now; otherwise at end of that day
-    real_today = now.date()
-    if latest_date == real_today:
-        td_end      = now
-        today_label = f"{NIGHT_END:02d}:00 today \u2192 now ({now.strftime('%H:%M')})"
-    else:
-        td_end      = datetime(latest_date.year, latest_date.month, latest_date.day, 23, 59, 59)
-        today_label = f"{NIGHT_END:02d}:00 {fmt(latest_date)} \u2192 end of day"
+    td_end   = datetime(today.year, today.month, today.day, now.hour, now.minute)
 
     def period_stats(start_dt: datetime, end_dt: datetime, label: str) -> dict:
         def row_in_range(row) -> bool:
@@ -521,8 +501,14 @@ def compute_situation(chart_df: pd.DataFrame) -> dict:
         }
 
     return {
-        "last_night": period_stats(ln_start, ln_end, ln_label),
-        "today":      period_stats(td_start, td_end, today_label),
+        "last_night": period_stats(
+            ln_start, ln_end,
+            f"{NIGHT_START}:00 yesterday \u2192 {NIGHT_END:02d}:00 today"
+        ),
+        "today": period_stats(
+            td_start, td_end,
+            f"{NIGHT_END:02d}:00 today \u2192 now ({now.strftime('%H:%M')} UTC)"
+        ),
     }
 
 
@@ -1883,17 +1869,30 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var el = document.getElementById('situation-content');
       if (!el) return;
       var titles = {{ last_night: 'What happened last night?', today: 'What\u2019s happening today?' }};
-      // Format fetchedAt timestamp
+      // Format fetchedAt timestamp in Israel time
+      var ILtz = 'Asia/Jerusalem';
       var fetchedStr = '';
       if (fetchedAt) {{
         try {{
-          var d = new Date(fetchedAt);
-          fetchedStr = d.toLocaleDateString(undefined, {{day:'numeric',month:'short',year:'numeric'}}) +
-                       ' at ' + d.toLocaleTimeString(undefined, {{hour:'2-digit',minute:'2-digit'}});
+          var fd = new Date(fetchedAt);
+          fetchedStr = fd.toLocaleDateString('en-GB', {{day:'numeric',month:'short',year:'numeric',timeZone:ILtz}}) +
+                       ' at ' + fd.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
         }} catch(e) {{ fetchedStr = fetchedAt; }}
       }}
+      // Compute next 06:00 UTC update
+      var nextUpdateStr = '';
+      try {{
+        var now = new Date();
+        var next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 6, 0, 0));
+        if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+        var diffH = (next - now) / 3600000;
+        var hoursLeft = Math.floor(diffH);
+        var minsLeft  = Math.round((diffH - hoursLeft) * 60);
+        var nextIL = next.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
+        nextUpdateStr = 'Next update in ~' + hoursLeft + 'h ' + minsLeft + 'm (' + nextIL + ' Israel time)';
+      }} catch(e) {{}}
       var html = fetchedStr
-        ? '<div style="font-size:11px;color:#999;margin-bottom:18px;">Data last fetched: ' + fetchedStr + '</div>'
+        ? '<div style="font-size:11px;color:#999;margin-bottom:18px;">Data last fetched: ' + fetchedStr + ' (Israel time)</div>'
         : '';
 
       ['last_night', 'today'].forEach(function(key) {{
@@ -1930,6 +1929,10 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         html += '</div>';
       }});
 
+      if (nextUpdateStr) {{
+        html += '<div style="font-size:11px;color:#999;margin-top:8px;padding-top:12px;border-top:1px solid ' +
+                (isDark ? '#2a2a3e' : '#e8e8e8') + ';">' + nextUpdateStr + '</div>';
+      }}
       el.innerHTML = html;
     }}
 
@@ -2043,7 +2046,8 @@ def main() -> None:
         print("  No salvo clusters found.")
 
     # 6. Save processed data (enables fast style-only reruns via build_chart.py)
-    fetched_at = datetime.now().isoformat()
+    from datetime import timezone as _tz
+    fetched_at = datetime.now(_tz.utc).isoformat()
     save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour,
                    fetched_at=fetched_at)
 
