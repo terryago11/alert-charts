@@ -835,10 +835,27 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     .sit-summary {{ font-size: 13px; color: #444; margin-bottom: 12px; line-height: 1.6; }}
     body.dark .sit-summary {{ color: #aaa; }}
     .sit-quiet {{ font-style: italic; color: #888; }}
-    .sit-sparklines {{ display: flex; flex-wrap: wrap; gap: 12px; }}
-    .sit-sparkline-cell {{ display: flex; flex-direction: column; align-items: center; min-width: 110px; }}
-    .sit-sparkline-label {{ font-size: 10px; color: #666; margin-top: 4px; text-align: center; max-width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-    body.dark .sit-sparkline-label {{ color: #888; }}
+    /* ── Situation Room timeline ── */
+    .sit-timeline {{ display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }}
+    .sit-tl-row {{
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      transition: background 0.12s;
+    }}
+    .sit-tl-row:hover {{ background: rgba(68,85,204,0.07); }}
+    body.dark .sit-tl-row:hover {{ background: rgba(68,85,204,0.15); }}
+    .sit-tl-time {{ font-size: 13px; font-weight: 600; color: #444; min-width: 46px; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+    body.dark .sit-tl-time {{ color: #bbb; }}
+    .sit-tl-types {{ display: flex; gap: 5px; flex-wrap: wrap; flex: 1; }}
+    .sit-badge {{ font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }}
+    .sit-badge-missile {{ background: #fee2e2; color: #991b1b; }}
+    .sit-badge-pre     {{ background: #fef3c7; color: #92400e; }}
+    .sit-badge-drone   {{ background: #e0e7ff; color: #3730a3; }}
+    body.dark .sit-badge-missile {{ background: #450a0a; color: #fca5a5; }}
+    body.dark .sit-badge-pre     {{ background: #422006; color: #fde68a; }}
+    body.dark .sit-badge-drone   {{ background: #1e1b4b; color: #a5b4fc; }}
+    .sit-tl-regions {{ display: flex; gap: 4px; flex-wrap: wrap; flex-shrink: 0; align-items: center; }}
+    .sit-tl-dot {{ width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }}
     #leadtime-chart {{ width:100%; height:100%; }}
     #salvos-chart {{ width:100%; height:100%; }}
     #main-chart, #date-full-chart {{ width:100%; height:100%; }}
@@ -897,7 +914,8 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       #filter-row {{ padding: 3px 8px; flex-wrap: wrap; row-gap: 4px; }}
 
       /* Hamburger visible; nav tabs become a fixed dropdown */
-      #hamburger-btn {{ display: inline-flex; }}
+      #hamburger-btn {{ display: inline-flex; border-radius: 4px; border-color: transparent; background: transparent; color: #555; }}
+      body.dark #hamburger-btn {{ color: #999; }}
       #nav-tabs {{
         display: none;
         position: fixed;
@@ -1868,17 +1886,99 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
 
     // ── Situation Room ───────────────────────────────────────────────────────
-    function makeSVGSparkline(hourlyArr, color) {{
-      var W = 120, H = 32, barW = Math.floor(W / 24);
-      var maxV = Math.max.apply(null, hourlyArr.concat([1]));
-      var bars = '';
-      for (var h = 0; h < 24; h++) {{
-        var bh   = Math.round(((hourlyArr[h] || 0) / maxV) * H);
-        var isNight = (h >= 22 || h < 6);
-        var fill = isNight ? color : color + '88';
-        bars += '<rect x="' + (h * barW) + '" y="' + (H - bh) + '" width="' + (barW - 1) + '" height="' + bh + '" fill="' + fill + '"/>';
+    // ── Situation Room timeline helpers ─────────────────────────────────────
+    function buildTimelineHTML(d, sectionTitle) {{
+      // Build (date_str, hour) pairs covered by this period
+      var startDate = (d.start_iso || '').slice(0, 10);
+      var startHour = parseInt((d.start_iso || '00').slice(11, 13)) || 0;
+      var endDate   = (d.end_iso   || '').slice(0, 10);
+      var endHour   = parseInt((d.end_iso   || '00').slice(11, 13)) || 0;
+
+      var pairs = [];
+      if (startDate === endDate) {{
+        for (var h = startHour; h < endHour; h++) pairs.push({{ds: startDate, h: h}});
+      }} else {{
+        for (var h = startHour; h <= 23; h++) pairs.push({{ds: startDate, h: h}});
+        for (var h2 = 0; h2 < endHour; h2++) pairs.push({{ds: endDate, h: h2}});
       }}
-      return '<svg width="' + W + '" height="' + H + '" xmlns="http://www.w3.org/2000/svg" style="display:block;">' + bars + '</svg>';
+
+      // Aggregate hourlyData for each pair
+      var rows = [];
+      pairs.forEach(function(pair) {{
+        var missile = 0, pre = 0, drone = 0, regions = {{}};
+        hourlyData.forEach(function(r) {{
+          if (r.date_str !== pair.ds || r.hour !== pair.h) return;
+          if      (r.alert_type === 'Missile alert') missile += r.count;
+          else if (r.alert_type === 'Pre-alert')     pre     += r.count;
+          else if (r.alert_type === 'Drone alert')   drone   += r.count;
+          regions[r.group] = (regions[r.group] || 0) + r.count;
+        }});
+        if (missile + pre + drone > 0)
+          rows.push({{ds: pair.ds, h: pair.h, missile: missile, pre: pre, drone: drone, regions: regions}});
+      }});
+
+      if (!rows.length) return '<div class="sit-quiet">Quiet \u2014 no alerts recorded for this period.</div>';
+
+      var html = '<div class="sit-timeline">';
+      rows.forEach(function(row) {{
+        var timeStr = ('0' + row.h).slice(-2) + ':00';
+        html += '<div class="sit-tl-row" data-ds="' + row.ds + '" data-h="' + row.h + '" data-sect="' + sectionTitle + '" onclick="openHourModal(this.dataset.ds,+this.dataset.h,this.dataset.sect)">';
+        html += '<span class="sit-tl-time">' + timeStr + '</span>';
+        html += '<div class="sit-tl-types">';
+        if (row.missile) html += '<span class="sit-badge sit-badge-missile">🚀\u202F' + row.missile + '</span>';
+        if (row.pre)     html += '<span class="sit-badge sit-badge-pre">\u26A1\u202F'           + row.pre     + '</span>';
+        if (row.drone)   html += '<span class="sit-badge sit-badge-drone">🛩\u202F'   + row.drone   + '</span>';
+        html += '</div>';
+        html += '<div class="sit-tl-regions">';
+        // Sort regions by count desc, show coloured dots
+        Object.keys(row.regions).sort(function(a, b) {{ return row.regions[b] - row.regions[a]; }}).forEach(function(grp) {{
+          var c = groupColors[grp] || '#888';
+          html += '<span class="sit-tl-dot" style="background:' + c + '" title="' + grp + '"></span>';
+        }});
+        html += '</div></div>';
+      }});
+      html += '</div>';
+      return html;
+    }}
+
+    function openHourModal(dateStr, hour, sectionLabel) {{
+      var rows = hourlyData.filter(function(r) {{ return r.date_str === dateStr && r.hour === hour; }});
+      var gd = {{}};
+      rows.forEach(function(r) {{
+        if (!gd[r.group]) gd[r.group] = {{missile:0, pre:0, drone:0}};
+        if      (r.alert_type === 'Missile alert') gd[r.group].missile += r.count;
+        else if (r.alert_type === 'Pre-alert')     gd[r.group].pre     += r.count;
+        else if (r.alert_type === 'Drone alert')   gd[r.group].drone   += r.count;
+      }});
+      var groups = Object.keys(gd).sort(function(a, b) {{
+        return (gd[b].missile + gd[b].pre + gd[b].drone) - (gd[a].missile + gd[a].pre + gd[a].drone);
+      }});
+
+      var textColor = isDark ? '#cccccc' : '#333333';
+      var plotBg    = isDark ? '#1a1a2e' : 'white';
+      var paperBg   = isDark ? '#0f0f1a' : '#fafafa';
+      var gridColor = isDark ? '#2a2a3e' : '#e0e0e0';
+
+      var traces = [
+        {{ name:'Missile alert', type:'bar', x:groups, y:groups.map(function(g){{return gd[g].missile;}}), marker:{{color:'#d62728'}} }},
+        {{ name:'Pre-alert',     type:'bar', x:groups, y:groups.map(function(g){{return gd[g].pre;}}),     marker:{{color:'#ff7f0e'}} }},
+        {{ name:'Drone alert',   type:'bar', x:groups, y:groups.map(function(g){{return gd[g].drone;}}),   marker:{{color:'#17becf'}} }},
+      ];
+      var layout = {{
+        barmode: 'stack',
+        title: {{ text: ('0'+hour).slice(-2)+':00 \u00b7 '+dateStr+'<br><sup>'+sectionLabel+'</sup>', font:{{color:textColor, size:13}}, x:0.5 }},
+        xaxis: {{ tickangle: -30, color: textColor, tickfont: {{size: 10}} }},
+        yaxis: {{ title: 'Alerts', color: textColor, gridcolor: gridColor, zeroline: false }},
+        plot_bgcolor: plotBg, paper_bgcolor: paperBg,
+        font: {{ family: 'Arial, Helvetica, sans-serif', color: textColor }},
+        margin: {{t:65, b:90, l:50, r:20}},
+        legend: {{ font: {{color: textColor}} }},
+      }};
+
+      document.getElementById('modal-title').textContent = ('0'+hour).slice(-2)+':00 \u2014 '+sectionLabel;
+      document.getElementById('modal-chart').style.height = '340px';
+      document.getElementById('modal-backdrop').classList.add('open');
+      Plotly.react('modal-chart', traces, layout, {{responsive: true}});
     }}
 
     function buildSituationView() {{
@@ -1931,30 +2031,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         }}
         html += '<div class="sit-sublabel">' + sublabel + '</div>';
 
-        if (!d.total_missile && !d.total_pre && !d.total_drone) {{
-          html += '<div class="sit-summary sit-quiet">Quiet \u2014 no alerts recorded for this period.</div>';
-        }} else {{
-          var parts = [];
-          if (d.total_missile) parts.push(d.total_missile + ' missile alert' + (d.total_missile !== 1 ? 's' : ''));
-          if (d.total_pre)     parts.push(d.total_pre     + ' pre-alert'     + (d.total_pre     !== 1 ? 's' : ''));
-          if (d.total_drone)   parts.push(d.total_drone   + ' drone alert'   + (d.total_drone   !== 1 ? 's' : ''));
-          var nr = d.regions.length;
-          var rStr = nr <= 3 ? d.regions.join(', ') : d.regions.slice(0, 3).join(', ') + ' and ' + (nr - 3) + ' more';
-          html += '<div class="sit-summary">' + parts.join(' and ') + ' across ' + nr + ' region' + (nr !== 1 ? 's' : '') + ' (' + rStr + ').</div>';
-
-          var regionKeys = Object.keys(d.per_region_hourly || {{}}).sort();
-          if (regionKeys.length) {{
-            html += '<div class="sit-sparklines">';
-            regionKeys.forEach(function(region) {{
-              var color = groupColors[region] || '#888888';
-              html += '<div class="sit-sparkline-cell">';
-              html += makeSVGSparkline(d.per_region_hourly[region], color);
-              html += '<div class="sit-sparkline-label" title="' + region + '">' + region + '</div>';
-              html += '</div>';
-            }});
-            html += '</div>';
-          }}
-        }}
+        html += buildTimelineHTML(d, titles[key]);
         html += '</div>';
       }});
 
