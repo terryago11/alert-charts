@@ -33,8 +33,12 @@ CITIES_JSON_URL = (
     "https://raw.githubusercontent.com/eladnava/pikud-haoref-api/master/cities.json"
 )
 
-GITHUB_CSV_URL = "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
-CUTOFF_DATE    = pd.Timestamp("2026-02-28")
+GITHUB_CSV_URL      = "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
+GITHUB_CONTENTS_API = "https://api.github.com/repos/dleshem/israel-alerts-data/contents/israel-alerts.csv"
+CUTOFF_DATE         = pd.Timestamp("2026-02-28")
+PROCESSED_SCHEMA_VERSION = 2
+SITE_URL = "https://terryago11.github.io/alert-charts"
+
 ALERT_TRANSLATIONS = {
     "בדקות הקרובות צפויות להתקבל התרעות באזורך": "Pre-alert",
     "חדירת כלי טיס עוין":                         "Drone alert",
@@ -88,7 +92,39 @@ def load_city_data() -> Tuple[dict, dict]:
 
 # ── Alert data loading ────────────────────────────────────────────────────────
 
-def fetch_github_csv() -> Optional[pd.DataFrame]:
+def fetch_csv_sha() -> Optional[str]:
+    """Return the current git blob SHA of the source CSV via GitHub Contents API."""
+    import os
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+    try:
+        resp = requests.get(GITHUB_CONTENTS_API, timeout=10, headers=headers)
+        resp.raise_for_status()
+        return resp.json().get("sha")
+    except Exception as exc:
+        print(f"  Could not fetch CSV SHA: {exc}")
+        return None
+
+
+def load_processed() -> Optional[dict]:
+    """Load data/processed.json if it exists and matches PROCESSED_SCHEMA_VERSION."""
+    path = DATA_DIR / "processed.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != PROCESSED_SCHEMA_VERSION:
+            print("  processed.json schema version mismatch — full rebuild.")
+            return None
+        return payload
+    except Exception as exc:
+        print(f"  Could not load processed.json: {exc}")
+        return None
+
+
+def fetch_github_csv(since_dt: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
     print(f"Fetching GitHub CSV … ({GITHUB_CSV_URL})")
     try:
         resp = requests.get(GITHUB_CSV_URL, timeout=30)
@@ -103,7 +139,15 @@ def fetch_github_csv() -> Optional[pd.DataFrame]:
     # Filter to known categories and cutoff date
     raw = raw[raw["category_desc"].isin(ALERT_TRANSLATIONS)]
     raw["_dt"] = pd.to_datetime(raw["alertDate"].str.replace(" ", "T"), errors="coerce")
-    raw = raw[raw["_dt"] >= CUTOFF_DATE].drop(columns=["_dt"])
+    raw = raw[raw["_dt"] >= CUTOFF_DATE]
+
+    # Incremental filter: only rows newer than last full-build fetched_at
+    if since_dt is not None:
+        before = len(raw)
+        raw = raw[raw["_dt"] > since_dt]
+        print(f"  Incremental filter (>{since_dt.isoformat()}): {len(raw):,} new rows (of {before:,} total)")
+
+    raw = raw.drop(columns=["_dt"])
 
     # Drop unused columns, rename to match existing normalise logic
     raw = raw.drop(columns=["matrix_id", "category"], errors="ignore")
@@ -434,6 +478,78 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     return pd.DataFrame(columns=["zone", "group", "date_str", "cluster_start", "cluster_size"])
 
 
+# ── Incremental merge helpers ─────────────────────────────────────────────────
+
+def build_gap_hist(mismatch_df: pd.DataFrame, event_type: str) -> dict:
+    """Convert paired mismatch rows → {group: {gap_seconds_str: count}} histogram."""
+    import math
+    hist: dict = {}
+    if mismatch_df is None or mismatch_df.empty:
+        return hist
+    paired = mismatch_df[
+        (mismatch_df["event_type"] == event_type) & mismatch_df["gap_seconds"].notna()
+    ]
+    for _, row in paired.iterrows():
+        gs = row["gap_seconds"]
+        if isinstance(gs, float) and math.isnan(gs):
+            continue
+        g   = row["group"]
+        key = str(int(gs))
+        if g not in hist:
+            hist[g] = {}
+        hist[g][key] = hist[g].get(key, 0) + 1
+    return hist
+
+
+def merge_chart_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge new chart_df rows into existing records, re-summing overlapping groups."""
+    if not existing_records:
+        return new_df
+    existing_df = pd.DataFrame(existing_records)
+    combined    = pd.concat([existing_df, new_df], ignore_index=True)
+    return (
+        combined
+        .groupby(["date_str", "hour", "group", "alert_type"], as_index=False)["count"]
+        .sum()
+    )
+
+
+def merge_mismatch(existing_agg: list, existing_gap_m: dict, existing_gap_d: dict,
+                   new_mismatch_df: pd.DataFrame) -> tuple:
+    """Merge new mismatch rows into existing aggregated counts and gap histograms."""
+    if new_mismatch_df is not None and not new_mismatch_df.empty:
+        new_agg_df = (
+            new_mismatch_df.groupby(["group", "date_str", "event_type"])
+            .size().reset_index(name="count")
+        )
+        new_agg   = new_agg_df.to_dict(orient="records")
+        new_gap_m = build_gap_hist(new_mismatch_df, "paired_missile")
+        new_gap_d = build_gap_hist(new_mismatch_df, "paired_drone")
+    else:
+        new_agg, new_gap_m, new_gap_d = [], {}, {}
+
+    # Merge agg: sum counts per (group, date_str, event_type)
+    combined: dict = {}
+    for rec in existing_agg + new_agg:
+        key = (rec["group"], rec["date_str"], rec["event_type"])
+        combined[key] = combined.get(key, 0) + rec["count"]
+    merged_agg = [
+        {"group": k[0], "date_str": k[1], "event_type": k[2], "count": v}
+        for k, v in combined.items()
+    ]
+
+    def _merge_hist(old: dict, new: dict) -> dict:
+        result = {g: dict(h) for g, h in old.items()}
+        for g, h in new.items():
+            if g not in result:
+                result[g] = {}
+            for gs, cnt in h.items():
+                result[g][gs] = result[g].get(gs, 0) + cnt
+        return result
+
+    return merged_agg, _merge_hist(existing_gap_m, new_gap_m), _merge_hist(existing_gap_d, new_gap_d)
+
+
 # ── Situation Room ─────────────────────────────────────────────────────────────
 
 def compute_situation(chart_df: pd.DataFrame) -> dict:
@@ -499,29 +615,63 @@ def compute_situation(chart_df: pd.DataFrame) -> dict:
 
 # ── Processed-data serialisation ──────────────────────────────────────────────
 
-def save_processed(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame],
-                   salvo_df: Optional[pd.DataFrame],
-                   partial_day: Optional[str], partial_hour: Optional[int],
-                   fetched_at: Optional[str] = None) -> None:
-    """Serialise aggregated data to data/processed.json for use by build_chart.py."""
+def save_processed(chart_df: pd.DataFrame,
+                   mismatch_agg: list,
+                   gap_missile_hist: dict,
+                   gap_drone_hist: dict,
+                   partial_day: Optional[str],
+                   partial_hour: Optional[int],
+                   fetched_at: Optional[str] = None,
+                   csv_sha: Optional[str] = None) -> None:
+    """Serialise aggregated data to data/processed.json (schema v2) for build_chart.py."""
     DATA_DIR.mkdir(exist_ok=True)
     payload = {
-        "chart_df":    chart_df.to_dict(orient="records"),
-        "mismatch_df": mismatch_df.to_dict(orient="records") if mismatch_df is not None else [],
-        "salvo_df":    salvo_df.to_dict(orient="records")    if salvo_df    is not None else [],
-        "partial_day":  partial_day,
-        "partial_hour": partial_hour,
-        "fetched_at":   fetched_at or datetime.now().isoformat(),
+        "schema_version":  PROCESSED_SCHEMA_VERSION,
+        "fetched_at":      fetched_at or datetime.now().isoformat(),
+        "csv_sha":         csv_sha,
+        "partial_day":     partial_day,
+        "partial_hour":    partial_hour,
+        "chart_df":        chart_df.to_dict(orient="records"),
+        "mismatch_agg":    mismatch_agg,
+        "gap_missile_hist": gap_missile_hist,
+        "gap_drone_hist":   gap_drone_hist,
     }
     path = DATA_DIR / "processed.json"
     path.write_text(json.dumps(payload, default=str), encoding="utf-8")
-    print(f"  Processed data saved → {path}")
+    size_kb = path.stat().st_size // 1024
+    print(f"  Processed data saved → {path}  ({size_kb:,} KB)")
+
+
+def save_situation_json(chart_df: pd.DataFrame, fetched_at: str) -> None:
+    """Write output/situation.json with the last 48 h of chart_df rows.
+
+    This small file is fetched client-side on page load so the Situation Room
+    always shows data from the most recent build, even if the HTML itself is stale.
+    """
+    try:
+        now_utc = datetime.fromisoformat(fetched_at.rstrip("Z"))
+    except (ValueError, AttributeError):
+        now_utc = datetime.utcnow()
+
+    cutoff_date = (now_utc - timedelta(days=2)).strftime("%Y-%m-%d")
+    recent = chart_df[chart_df["date_str"] >= cutoff_date] if not chart_df.empty else chart_df
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    payload = {
+        "fetched_at": fetched_at,
+        "rows": recent.to_dict(orient="records"),
+    }
+    path = OUTPUT_DIR / "situation.json"
+    path.write_text(json.dumps(payload, default=str), encoding="utf-8")
+    print(f"  Situation data saved → {path}  ({len(recent):,} rows)")
 
 
 # ── Chart ─────────────────────────────────────────────────────────────────────
 
-def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = None,
-                salvo_df: Optional[pd.DataFrame] = None,
+def build_chart(chart_df: pd.DataFrame,
+                mismatch_agg: Optional[list] = None,
+                gap_missile_hist: Optional[dict] = None,
+                gap_drone_hist: Optional[dict] = None,
                 partial_day: Optional[str] = None, partial_hour: Optional[int] = None,
                 situation_data: Optional[dict] = None,
                 fetched_at: Optional[str] = None) -> None:
@@ -654,41 +804,10 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         )] if partial_day else []),
     )
 
-    # ── Mismatch records for JS-side chart building ────────────────────────
-    # Pre-aggregate to (group, date_str, event_type, count) — much smaller than raw rows
-    if mismatch_df is not None and not mismatch_df.empty:
-        mismatch_agg = (
-            mismatch_df.groupby(["group", "date_str", "event_type"])
-            .size()
-            .reset_index(name="count")
-        )
-        mismatch_records_js = json.dumps(mismatch_agg.to_dict(orient="records"))
-    else:
-        mismatch_records_js = "[]"
-
-    # ── Gap-seconds arrays for lead-time histogram ──────────────────────────
-    if mismatch_df is not None and not mismatch_df.empty and "gap_seconds" in mismatch_df.columns:
-        gap_missile_js = json.dumps(
-            mismatch_df[mismatch_df["event_type"] == "paired_missile"][["group", "gap_seconds"]]
-            .dropna().assign(gap_seconds=lambda d: d["gap_seconds"].astype(int))
-            .rename(columns={"gap_seconds": "gap"}).to_dict(orient="records")
-        )
-        gap_drone_js = json.dumps(
-            mismatch_df[mismatch_df["event_type"] == "paired_drone"][["group", "gap_seconds"]]
-            .dropna().assign(gap_seconds=lambda d: d["gap_seconds"].astype(int))
-            .rename(columns={"gap_seconds": "gap"}).to_dict(orient="records")
-        )
-    else:
-        gap_missile_js = "[]"
-        gap_drone_js   = "[]"
-
-    # ── Salvo cluster records for JS (individual clusters, aggregated client-side) ─
-    if salvo_df is not None and not salvo_df.empty:
-        salvo_records_js = json.dumps(
-            salvo_df[["group", "date_str", "cluster_size", "cluster_start"]].to_dict(orient="records")
-        )
-    else:
-        salvo_records_js = "[]"
+    # ── Mismatch / gap-hist serialisation ─────────────────────────────────────
+    mismatch_records_js = json.dumps(mismatch_agg or [])
+    gap_missile_js      = json.dumps(gap_missile_hist or {})
+    gap_drone_js        = json.dumps(gap_drone_hist   or {})
 
     # ── Situation Room data ───────────────────────────────────────────────────
     _empty_period = {"label": "", "start_iso": "", "end_iso": "",
@@ -743,6 +862,14 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IDF Alert Activity</title>
+  <meta property="og:title"        content="IDF Alert Activity Dashboard">
+  <meta property="og:description"  content="Live Israeli Homefront Command alert data — by hour, region, and type">
+  <meta property="og:image"        content="{SITE_URL}/preview.png">
+  <meta property="og:image:width"  content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:type"         content="website">
+  <meta property="og:url"          content="{SITE_URL}">
+  <meta name="twitter:card"        content="summary_large_image">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='2' y='18' width='6' height='12' fill='%234e79a7'/><rect x='10' y='10' width='6' height='20' fill='%23f28e2b'/><rect x='18' y='4' width='6' height='26' fill='%23e15759'/><rect x='26' y='13' width='6' height='17' fill='%2376b7b2'/></svg>">
   <style>
     :root {{ --tb-h: 74px; }}
@@ -806,13 +933,13 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     body.dark #sep {{ background: #333; }}
     /* ── Chart area ── */
     #view-hour, #view-date, #view-mismatch, #view-leadtime, #view-salvos {{ position: absolute; left:0; right:0; }}
-    #view-hour  {{ top: var(--tb-h); bottom: 0; }}
-    #view-date  {{ top: var(--tb-h); bottom: 0; display: none; }}
-    #view-mismatch {{ top: var(--tb-h); bottom: 0; display: none; }}
-    #view-leadtime {{ top: var(--tb-h); bottom: 0; display: none; }}
-    #view-salvos   {{ top: var(--tb-h); bottom: 0; display: none; }}
+    #view-hour  {{ top: var(--tb-h); bottom: 28px; }}
+    #view-date  {{ top: var(--tb-h); bottom: 28px; display: none; }}
+    #view-mismatch {{ top: var(--tb-h); bottom: 28px; display: none; }}
+    #view-leadtime {{ top: var(--tb-h); bottom: 28px; display: none; }}
+    #view-salvos   {{ top: var(--tb-h); bottom: 28px; display: none; }}
     /* ── Situation Room ── */
-    #view-situation {{ position: absolute; left:0; right:0; top: var(--tb-h); bottom: 0; display: none; overflow-y: auto; }}
+    #view-situation {{ position: absolute; left:0; right:0; top: var(--tb-h); bottom: 28px; display: none; overflow-y: auto; }}
     .sit-section {{ margin-bottom: 28px; }}
     .sit-section-title {{ font-size: 15px; font-weight: 700; margin-bottom: 6px; color: #4455cc; }}
     body.dark .sit-section-title {{ color: #7788ee; }}
@@ -845,6 +972,17 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     #salvos-chart {{ width:100%; height:100%; }}
     #main-chart, #date-full-chart {{ width:100%; height:100%; }}
     #mismatch-chart-bar {{ width:100%; height:100%; }}
+
+    /* ── Global footer ── */
+    #global-footer {{
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
+      padding: 5px 16px; font-size: 11px; text-align: center;
+      background: rgba(245,245,252,0.93); color: #888;
+      border-top: 1px solid #e0e0e8; backdrop-filter: blur(4px);
+    }}
+    body.dark #global-footer {{
+      background: rgba(10,10,28,0.93); color: #666; border-color: #2a2a3e;
+    }}
 
     /* ── Modal ── */
     #modal-backdrop {{
@@ -1099,9 +1237,8 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     var dateData            = {date_data_js};
     var dateLayout          = {date_layout_js};
     var allMismatchRecords  = {mismatch_records_js};
-    var gapMissileSeconds   = {gap_missile_js};
-    var gapDroneSeconds     = {gap_drone_js};
-    var allSalvoRecords     = {salvo_records_js};
+    var gapMissileHist      = {gap_missile_js};
+    var gapDroneHist        = {gap_drone_js};
     var situationData       = {situation_data_js};
     var partialDay          = {partial_day_js};
     var partialHour         = {partial_hour_js};
@@ -1211,7 +1348,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     document.getElementById('view-situation').style.display = 'block';
     // Defer initial chart renders so Plotly has correct dimensions
     setTimeout(function() {{
-      buildSituationView();
+      initSituationRoom();
       Plotly.newPlot('main-chart', hourData, hourLayout, {{responsive:true}});
       Plotly.relayout('main-chart', lightMain);
       updateHourChart();  // apply locked Y scale
@@ -1489,9 +1626,7 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     // Populate leadtime region dropdown once
     (function() {{
       var sel = document.getElementById('leadtime-region-select');
-      var regions = [...new Set(
-        gapMissileSeconds.concat(gapDroneSeconds).map(function(r) {{ return r.group; }})
-      )].sort();
+      var regions = Object.keys(Object.assign({{}}, gapMissileHist, gapDroneHist)).sort();
       regions.forEach(function(g) {{
         var o = document.createElement('option');
         o.value = g; o.textContent = g;
@@ -1499,10 +1634,11 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       }});
     }})();
 
-    // Populate salvos dropdowns once
+    // Populate salvos dropdowns once (derived from hourlyData, Missile alert rows)
     (function() {{
-      var dates   = [...new Set(allSalvoRecords.map(function(r) {{ return r.date_str; }}))].sort();
-      var regions = [...new Set(allSalvoRecords.map(function(r) {{ return r.group; }}))].sort();
+      var missileRows = hourlyData.filter(function(r) {{ return r.alert_type === 'Missile alert'; }});
+      var dates   = [...new Set(missileRows.map(function(r) {{ return r.date_str; }}))].sort();
+      var regions = [...new Set(missileRows.map(function(r) {{ return r.group;    }}))].sort();
 
       var rSel = document.getElementById('salvos-region-select');
       regions.forEach(function(g) {{
@@ -1667,14 +1803,21 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
         ? {{bg:'#1a1a2e', paper:'#0f0f1a', grid:'#2a2a3e', text:'#cccccc', legendBg:'rgba(26,26,46,0.85)',    legendBorder:'#444'}}
         : {{bg:'white',   paper:'#fafafa', grid:'#e0e0e0', text:'#333333', legendBg:'rgba(255,255,255,0.85)', legendBorder:'#ccc'}};
 
-      // Filter by region then convert gap seconds → minutes
-      function toMinutes(arr) {{
-        var filtered = region ? arr.filter(function(r) {{ return r.group === region; }}) : arr;
-        return filtered.map(function(r) {{ return parseFloat((r.gap / 60).toFixed(2)); }});
+      // Expand histogram → minutes array (only 16 unique values, fast)
+      function histToMinutes(hist) {{
+        var out = [];
+        var src = region ? (hist[region] ? {{[region]: hist[region]}} : {{}}) : hist;
+        Object.keys(src).forEach(function(g) {{
+          Object.keys(src[g]).forEach(function(gs) {{
+            var m = parseInt(gs, 10) / 60;
+            for (var i = 0; i < src[g][gs]; i++) out.push(parseFloat(m.toFixed(2)));
+          }});
+        }});
+        return out;
       }}
 
-      var missileMin = toMinutes(gapMissileSeconds);
-      var droneMin   = toMinutes(gapDroneSeconds);
+      var missileMin = histToMinutes(gapMissileHist);
+      var droneMin   = histToMinutes(gapDroneHist);
 
       // Pre-aggregate into explicit bins so hovertemplate can show exact edges.
       // Plotly histogram %{{x}} gives the bin centre, not the left edge, making
@@ -1783,8 +1926,9 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       var paperBg   = isDark ? '#0f0f1a' : '#fafafa';
       var plotBg    = isDark ? '#1a1a2e' : 'white';
 
-      var filtered = allSalvoRecords.filter(function(r) {{
-        return (!salvosRegion   || r.group    === salvosRegion)
+      var filtered = hourlyData.filter(function(r) {{
+        return r.alert_type === 'Missile alert'
+            && (!salvosRegion   || r.group    === salvosRegion)
             && (!salvosDateFrom || r.date_str >= salvosDateFrom)
             && (!salvosDateTo   || r.date_str <= salvosDateTo);
       }});
@@ -1792,22 +1936,17 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       if (!filtered.length) {{
         Plotly.react('salvos-chart', [], {{
           paper_bgcolor: paperBg, plot_bgcolor: plotBg, font: {{color: textColor}},
-          title: {{text: 'No salvo data for selected filters', x: 0.5, font: {{color: textColor}}}},
+          title: {{text: 'No missile data for selected filters', x: 0.5, font: {{color: textColor}}}},
         }}, {{responsive: true}});
         return;
       }}
 
-      // Group by (date_str, hour), summing cluster_size → missiles per hour per day
+      // Group by (date_str, hour), summing count → missiles per hour per day
       var byDateHour = {{}};
       var allDatesSet = {{}};
       filtered.forEach(function(r) {{
-        var hour = 0;
-        if (r.cluster_start) {{
-          var ti = r.cluster_start.indexOf('T');
-          if (ti !== -1) hour = parseInt(r.cluster_start.substring(ti + 1, ti + 3), 10);
-        }}
-        var key = r.date_str + '|' + hour;
-        byDateHour[key] = (byDateHour[key] || 0) + r.cluster_size;
+        var key = r.date_str + '|' + r.hour;
+        byDateHour[key] = (byDateHour[key] || 0) + r.count;
         allDatesSet[r.date_str] = true;
       }});
 
@@ -1871,6 +2010,59 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
     }}
 
     // ── Situation Room ───────────────────────────────────────────────────────
+
+    // Compute "last night" (22:00 yesterday → 06:00 today) and "today"
+    // (06:00 today → now) time windows dynamically using current Israel time.
+    function computeSituationWindows() {{
+      var NIGHT_START = {NIGHT_START}, NIGHT_END = {NIGHT_END};
+      var ILtz = 'Asia/Jerusalem';
+      var now  = new Date();
+      function isoDate(d) {{ return d.toLocaleDateString('en-CA', {{timeZone: ILtz}}); }}
+      function pad2(n)    {{ return n < 10 ? '0'+n : ''+n; }}
+      var todayStr  = isoDate(now);
+      var yesterStr = isoDate(new Date(+now - 86400000));
+      var rawH = now.toLocaleString('en-US', {{timeZone: ILtz, hour:'2-digit', hour12:false}});
+      var h = parseInt(rawH); if (h === 24) h = 0;
+      var m = now.getMinutes();
+      return {{
+        last_night: {{
+          start_iso: yesterStr + 'T' + pad2(NIGHT_START) + ':00:00',
+          end_iso:   todayStr  + 'T' + pad2(NIGHT_END)   + ':00:00',
+          label: pad2(NIGHT_START) + ':00 yesterday \u2192 ' + pad2(NIGHT_END) + ':00 today',
+        }},
+        today: {{
+          start_iso: todayStr + 'T' + pad2(NIGHT_END) + ':00:00',
+          end_iso:   todayStr + 'T' + pad2(h) + ':' + pad2(m) + ':00',
+          label: pad2(NIGHT_END) + ':00 today \u2192 now',
+        }},
+      }};
+    }}
+
+    // Merge fresh rows from situation.json into hourlyData, replacing any
+    // existing rows for the same (date_str, hour) pairs.
+    function mergeFreshRows(freshRows) {{
+      if (!freshRows || !freshRows.length) return;
+      var freshKeys = {{}};
+      freshRows.forEach(function(r) {{ freshKeys[r.date_str + '|' + r.hour] = true; }});
+      hourlyData = hourlyData.filter(function(r) {{ return !freshKeys[r.date_str + '|' + r.hour]; }});
+      hourlyData = hourlyData.concat(freshRows);
+    }}
+
+    // Fetch situation.json (updated every 30 min), merge fresh rows, then render.
+    function initSituationRoom() {{
+      var done = function() {{ buildSituationView(); }};
+      fetch('situation.json?t=' + Date.now())
+        .then(function(r) {{ return r.ok ? r.json() : Promise.resolve(null); }})
+        .then(function(fresh) {{
+          if (fresh && fresh.rows) {{
+            mergeFreshRows(fresh.rows);
+            if (fresh.fetched_at) fetchedAt = fresh.fetched_at;
+          }}
+          done();
+        }})
+        .catch(function() {{ done(); }});
+    }}
+
     // ── Situation Room timeline helpers ─────────────────────────────────────
     function buildTimelineHTML(d, sectionTitle) {{
       // Build (date_str, hour) pairs covered by this period
@@ -1980,43 +2172,50 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
                        ' at ' + fd.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
         }} catch(e) {{ fetchedStr = fetchedAt; }}
       }}
-      // Compute next update time — runs at 03, 09, 15, 21 UTC
+      // Compute next update times:
+      //   Situation data — refreshes every 30 min (next :00 or :30 mark)
+      //   Full charts    — rebuilds at 03, 09, 15, 21 UTC
       var nextUpdateStr = '';
       try {{
-        var now      = new Date();
+        var now = new Date();
+        // Next 30-min mark
+        var nextSit     = new Date(Math.ceil(now.getTime() / 1800000) * 1800000);
+        var sitMinsLeft = Math.round((nextSit - now) / 60000);
+        var nextSitIL   = nextSit.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
+        // Next full build
         var runHours = [3, 9, 15, 21];
         var nowUTCm  = now.getUTCHours() * 60 + now.getUTCMinutes();
         var nextH    = runHours.find(function(h) {{ return h * 60 > nowUTCm; }});
-        var next;
+        var nextFull;
         if (nextH !== undefined) {{
-          next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH, 0, 0));
+          nextFull = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH));
         }} else {{
-          // Past 21:00 UTC — next is 03:00 UTC tomorrow
-          next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 3, 0, 0));
+          nextFull = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 3));
         }}
-        var diffH     = (next - now) / 3600000;
-        var hoursLeft = Math.floor(diffH);
-        var minsLeft  = Math.round((diffH - hoursLeft) * 60);
-        var nextIL    = next.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
-        nextUpdateStr = 'Next update in ~' + hoursLeft + 'h ' + minsLeft + 'm (' + nextIL + ' Israel time)';
+        var fullDiff  = nextFull - now;
+        var fullH     = Math.floor(fullDiff / 3600000);
+        var fullM     = Math.round((fullDiff % 3600000) / 60000);
+        var fullIL    = nextFull.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
+        nextUpdateStr = 'Situation data: next refresh in ~' + sitMinsLeft + 'm (' + nextSitIL + ' Israel time)'
+          + ' \u00b7 Full charts: ~' + fullH + 'h ' + fullM + 'm (' + fullIL + ' Israel time)';
       }} catch(e) {{}}
       var html = fetchedStr
         ? '<div style="font-size:11px;color:#999;margin-bottom:18px;">Data last fetched: ' + fetchedStr + ' (Israel time)</div>'
         : '';
 
+      var windows = computeSituationWindows();
       ['last_night', 'today'].forEach(function(key) {{
-        var d = situationData[key];
-        if (!d) return;
+        var w = windows[key];
         html += '<div class="sit-section">';
         html += '<div class="sit-section-title">' + titles[key] + '</div>';
-        var sublabel = d.label || '';
-        if (key === 'today' && sublabel) {{
+        var sublabel = w.label;
+        if (key === 'today') {{
           var nowIL = new Date().toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
           sublabel += ' (' + nowIL + ' Israel time)';
         }}
         html += '<div class="sit-sublabel">' + sublabel + '</div>';
 
-        html += buildTimelineHTML(d, titles[key]);
+        html += buildTimelineHTML(w, titles[key]);
         html += '</div>';
       }});
 
@@ -2045,10 +2244,39 @@ def build_chart(chart_df: pd.DataFrame, mismatch_df: Optional[pd.DataFrame] = No
       buildSalvosChart();
     }}
   </script>
+  <footer id="global-footer">
+    <span id="global-footer-fetched"></span>
+    &nbsp;&middot;&nbsp;
+    Built by Ira and Natan Skop with some help from Claude Code
+  </footer>
+  <script>
+    (function() {{
+      var el = document.getElementById('global-footer-fetched');
+      if (!el) return;
+      var ILtz = 'Asia/Jerusalem';
+      try {{
+        var d = new Date(fetchedAt);
+        var dateStr = d.toLocaleDateString('en-GB', {{day:'2-digit', month:'short', year:'numeric', timeZone:ILtz}});
+        var timeStr = d.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        el.textContent = 'Main data fetched ' + dateStr + ' at ' + timeStr + ' Israel time';
+      }} catch(e) {{
+        el.textContent = 'Main data fetched ' + fetchedAt;
+      }}
+    }})();
+  </script>
 </body>
 </html>"""
 
     OUTPUT_DIR.mkdir(exist_ok=True)
+
+    # Generate OG preview image (By Hour chart snapshot for social sharing)
+    try:
+        preview_path = OUTPUT_DIR / "preview.png"
+        hour_fig.write_image(str(preview_path), width=1200, height=630, scale=1)
+        print(f"  Preview image saved → {preview_path}")
+    except Exception as _e:
+        print(f"  Preview image skipped ({_e})")
+
     outfile = OUTPUT_DIR / "index.html"
     outfile.write_text(html, encoding="utf-8")
     print(f"\nChart saved → {outfile}")
@@ -2076,11 +2304,44 @@ def print_summary(zone_total: dict, zone_night: dict) -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from datetime import timezone as _tz
+    situation_only = "--situation-only" in sys.argv
+
     # 1. City → zone mapping
     city_to_zone, _ = load_city_data()
 
-    # 2. Alert data — GitHub CSV first, local file as fallback
-    raw = fetch_github_csv()
+    # 2. Load existing processed state (provides incremental cutoff fetched_at)
+    existing = load_processed()
+
+    # 3. Check if source CSV has changed since last full build
+    print("\nChecking source CSV for changes …")
+    current_sha = fetch_csv_sha()
+    if existing and current_sha and current_sha == existing.get("csv_sha"):
+        print("  CSV unchanged — skipping download.")
+        # Rebuild HTML from cached data (situation data is time-sensitive, always fresh)
+        fetched_at     = existing["fetched_at"]
+        chart_df       = pd.DataFrame(existing["chart_df"])
+        mismatch_agg   = existing.get("mismatch_agg", [])
+        gap_missile_h  = existing.get("gap_missile_hist", {})
+        gap_drone_h    = existing.get("gap_drone_hist", {})
+        partial_day    = existing.get("partial_day")
+        partial_hour   = existing.get("partial_hour")
+
+        save_situation_json(chart_df, fetched_at)
+        if situation_only:
+            print("\nDone (situation-only, CSV unchanged).  output/situation.json updated.")
+            return
+
+        situation_data = compute_situation(chart_df)
+        build_chart(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
+                    partial_day=partial_day, partial_hour=partial_hour,
+                    situation_data=situation_data, fetched_at=fetched_at)
+        print("\nDone.  Open output/index.html in your browser.")
+        return
+
+    # 4. Download CSV — incremental if we have a prior full-build timestamp
+    since_dt = pd.Timestamp(existing["fetched_at"]) if existing else None
+    raw = fetch_github_csv(since_dt=since_dt)
     if raw is not None:
         df = _normalise_df(raw)
     else:
@@ -2090,63 +2351,70 @@ def main() -> None:
             sys.exit(1)
         df = load_alerts(data_file)
 
-    # 2b. Detect partial day: if the latest date in the data is today, the day isn't over.
-    #     Use current clock time for the "through hour" annotation, not the last alert time.
-    last_date   = df["date_str"].dropna().max()
-    today_str   = date.today().isoformat()
-    is_partial  = last_date == today_str
-    partial_day = last_date if is_partial else None
-    partial_hour = datetime.now().hour if is_partial else None
-    if partial_day:
-        print(f"  Partial day detected: {partial_day} — fetched at hour {partial_hour:02d}:xx")
-
-    # 3. Aggregate (with deduplication)
+    # 5. Aggregate new rows
     print("\nAggregating alerts by zone …")
-    zone_total, zone_night, chart_df = aggregate(df, city_to_zone)
-
+    zone_total, zone_night, new_chart_df = aggregate(df, city_to_zone)
     total_alerts = sum(zone_total.values())
     total_night  = sum(zone_night.values())
     print(f"  Deduplicated alert events : {total_alerts:,}")
     print(f"  Of which at night         : {total_night:,}  "
           f"({round(total_night / total_alerts * 100, 1) if total_alerts else 0}%)")
 
-    # 4. Summary table
+    # Merge with historical chart_df from prior build
+    chart_df = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
+
+    # 5b. Detect partial day from the merged chart_df
+    last_date    = chart_df["date_str"].dropna().max() if not chart_df.empty else None
+    today_str    = date.today().isoformat()
+    is_partial   = last_date == today_str
+    partial_day  = last_date if is_partial else None
+    partial_hour = datetime.now().hour if is_partial else None
+    if partial_day:
+        print(f"  Partial day detected: {partial_day} — fetched at hour {partial_hour:02d}:xx")
+
+    fetched_at = datetime.now(_tz.utc).isoformat()
+
+    # In situation-only mode: save situation.json and exit without the full chart build.
+    if situation_only:
+        save_situation_json(chart_df, fetched_at)
+        print("\nDone (situation-only).  output/situation.json updated.")
+        return
+
+    # 6. Summary table
     print_summary(zone_total, zone_night)
 
-    # 5. Pre-alert / missile mismatch analysis
+    # 7. Pre-alert / missile mismatch analysis (new rows only; merge with existing)
     print("\nComputing pre-alert / missile mismatches …")
-    mismatch_df = compute_mismatches(df, city_to_zone)
-    if not mismatch_df.empty:
-        counts = mismatch_df["event_type"].value_counts()
+    new_mismatch_df = compute_mismatches(df, city_to_zone)
+    if not new_mismatch_df.empty:
+        counts = new_mismatch_df["event_type"].value_counts()
         for et in ALL_EVENT_TYPES:
             print(f"  {et:<16}: {counts.get(et, 0):,}")
-
         OUTPUT_DIR.mkdir(exist_ok=True)
         xlsx_path = OUTPUT_DIR / "mismatches.xlsx"
-        mismatch_df.to_excel(xlsx_path, index=False)
+        new_mismatch_df.to_excel(xlsx_path, index=False)
         print(f"  Saved → {xlsx_path}")
 
-    # 5b. Salvo cluster analysis
-    print("\nComputing salvo clusters …")
-    salvo_df = compute_salvos(df, city_to_zone)
-    if not salvo_df.empty:
-        print(f"  Salvo clusters found    : {len(salvo_df):,}")
-        print(f"  Total missiles in salvos: {salvo_df['cluster_size'].sum():,}")
-        print(f"  Zones with salvos       : {salvo_df['zone'].nunique():,}")
-    else:
-        print("  No salvo clusters found.")
+    mismatch_agg, gap_missile_h, gap_drone_h = merge_mismatch(
+        existing.get("mismatch_agg", []) if existing else [],
+        existing.get("gap_missile_hist", {}) if existing else {},
+        existing.get("gap_drone_hist", {}) if existing else {},
+        new_mismatch_df,
+    )
 
-    # 6. Save processed data (enables fast style-only reruns via build_chart.py)
-    from datetime import timezone as _tz
-    fetched_at = datetime.now(_tz.utc).isoformat()
-    save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour,
-                   fetched_at=fetched_at)
+    # 8. Save processed data (v2 schema, incremental)
+    save_processed(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
+                   partial_day, partial_hour,
+                   fetched_at=fetched_at, csv_sha=current_sha)
 
-    # 7. Situation Room summary (time-sensitive, computed fresh each run)
+    # 9. Save situation.json (small file fetched client-side on every page load)
+    save_situation_json(chart_df, fetched_at)
+
+    # 10. Situation Room summary (time-sensitive, computed fresh each run)
     situation_data = compute_situation(chart_df)
 
-    # 8. Chart
-    build_chart(chart_df, mismatch_df, salvo_df=salvo_df,
+    # 11. Build chart
+    build_chart(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
                 partial_day=partial_day, partial_hour=partial_hour,
                 situation_data=situation_data, fetched_at=fetched_at)
     print("\nDone.  Open output/index.html in your browser.")

@@ -19,24 +19,37 @@ from main import (
     ALL_EVENT_TYPES,
     OUTPUT_DIR,
     aggregate,
+    build_gap_hist,
     compute_mismatches,
-    compute_salvos,
     fetch_github_csv,
     find_data_file,
     load_alerts,
     load_city_data,
+    load_processed,
+    merge_mismatch,
     _normalise_df,
     print_summary,
     save_processed,
+    save_situation_json,
 )
 
 
 def main() -> None:
+    from datetime import timezone as _tz
+
     # 1. City → zone mapping
     city_to_zone, _ = load_city_data()
 
-    # 2. Alert data — GitHub CSV first, local file as fallback
-    raw = fetch_github_csv()
+    # 2. Load existing state for incremental merge
+    existing = load_processed()
+
+    # 3. Alert data — GitHub CSV (incremental if prior state exists)
+    since_dt = None
+    if existing:
+        import pandas as pd
+        since_dt = pd.Timestamp(existing["fetched_at"])
+
+    raw = fetch_github_csv(since_dt=since_dt)
     if raw is not None:
         df = _normalise_df(raw)
     else:
@@ -46,7 +59,8 @@ def main() -> None:
             sys.exit(1)
         df = load_alerts(data_file)
 
-    # 2b. Detect partial day
+    # 4. Detect partial day
+    import pandas as pd
     last_date    = df["date_str"].dropna().max()
     today_str    = date.today().isoformat()
     is_partial   = last_date == today_str
@@ -55,9 +69,10 @@ def main() -> None:
     if partial_day:
         print(f"  Partial day detected: {partial_day} — fetched at hour {partial_hour:02d}:xx")
 
-    # 3. Aggregate (with deduplication)
+    # 5. Aggregate and merge with existing chart_df
     print("\nAggregating alerts by zone …")
-    zone_total, zone_night, chart_df = aggregate(df, city_to_zone)
+    from main import merge_chart_df
+    zone_total, zone_night, new_chart_df = aggregate(df, city_to_zone)
 
     total_alerts = sum(zone_total.values())
     total_night  = sum(zone_night.values())
@@ -65,34 +80,36 @@ def main() -> None:
     print(f"  Of which at night         : {total_night:,}  "
           f"({round(total_night / total_alerts * 100, 1) if total_alerts else 0}%)")
 
-    # 4. Summary table
+    chart_df = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
+
+    # 6. Summary table
     print_summary(zone_total, zone_night)
 
-    # 5. Pre-alert / missile mismatch analysis
+    # 7. Pre-alert / missile mismatch analysis
     print("\nComputing pre-alert / missile mismatches …")
-    mismatch_df = compute_mismatches(df, city_to_zone)
-    if not mismatch_df.empty:
-        counts = mismatch_df["event_type"].value_counts()
+    new_mismatch_df = compute_mismatches(df, city_to_zone)
+    if not new_mismatch_df.empty:
+        counts = new_mismatch_df["event_type"].value_counts()
         for et in ALL_EVENT_TYPES:
             print(f"  {et:<16}: {counts.get(et, 0):,}")
 
         OUTPUT_DIR.mkdir(exist_ok=True)
         xlsx_path = OUTPUT_DIR / "mismatches.xlsx"
-        mismatch_df.to_excel(xlsx_path, index=False)
+        new_mismatch_df.to_excel(xlsx_path, index=False)
         print(f"  Saved → {xlsx_path}")
 
-    # 5b. Salvo cluster analysis
-    print("\nComputing salvo clusters …")
-    salvo_df = compute_salvos(df, city_to_zone)
-    if not salvo_df.empty:
-        print(f"  Salvo clusters found    : {len(salvo_df):,}")
-        print(f"  Total missiles in salvos: {salvo_df['cluster_size'].sum():,}")
-        print(f"  Zones with salvos       : {salvo_df['zone'].nunique():,}")
-    else:
-        print("  No salvo clusters found.")
+    mismatch_agg, gap_missile_h, gap_drone_h = merge_mismatch(
+        existing.get("mismatch_agg", []) if existing else [],
+        existing.get("gap_missile_hist", {}) if existing else {},
+        existing.get("gap_drone_hist", {}) if existing else {},
+        new_mismatch_df,
+    )
 
-    # 6. Save processed data
-    save_processed(chart_df, mismatch_df, salvo_df, partial_day, partial_hour)
+    # 8. Save processed data
+    fetched_at = datetime.now(_tz.utc).isoformat()
+    save_processed(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
+                   partial_day, partial_hour, fetched_at=fetched_at)
+    save_situation_json(chart_df, fetched_at)
     print("\nDone.  Run 'python build_chart.py' to regenerate the HTML.")
 
 

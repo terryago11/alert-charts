@@ -4,14 +4,22 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 3,9,15,21 * * *'   # 4× daily: 03/09/15/21 UTC = 06/12/18/00 Israel time
+    - cron: '0 3,9,15,21 * * *'   # full build 4× daily: 03/09/15/21 UTC = 06/12/18/00 Israel time
+    - cron: '*/30 * * * *'         # situation.json only, every 30 min
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: build-deploy
+  cancel-in-progress: false   # let running build finish; queue next
+
 jobs:
   build:
+    # Full build: runs on push, manual dispatch, and the 4× daily schedule.
+    # Skip on the every-30-min cron (handled by the situation job below).
+    if: github.event_name != 'schedule' || github.event.schedule != '*/30 * * * *'
     runs-on: ubuntu-latest
 
     steps:
@@ -25,9 +33,19 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Build dashboard
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 main.py
         # The script tries Google Sheets first; falls back to any local data file in data/.
         # Note: oref.org.il is geo-blocked to Israeli IPs and is not attempted.
+
+      - name: Commit processed.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/processed.json
+          git diff --staged --quiet || git commit -m "chore: update processed.json [skip ci]"
+          git push || true
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
@@ -35,3 +53,31 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./output
           publish_branch: gh-pages
+
+  situation:
+    # Lightweight job: fetches fresh alert data and updates only situation.json.
+    # Runs every 30 min so the Situation Room stays current even when the full
+    # build hasn't run yet (e.g. if the 6am build failed).
+    if: github.event_name == 'schedule' && github.event.schedule == '*/30 * * * *'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Update situation data
+        run: python3 main.py --situation-only
+
+      - name: Deploy situation.json to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./output
+          publish_branch: gh-pages
+          keep_files: true   # don't wipe index.html from the full build
