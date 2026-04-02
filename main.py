@@ -1350,6 +1350,18 @@ def build_chart(chart_df: pd.DataFrame,
         hover_missile_events: 'missile events',
         popup_daily_dist:     'Daily Alert Distribution',
         yaxis_alert_events:   'Alert Events',
+        xaxis_hour:           'Hour of Day',
+        yaxis_hour:           'Alert Events',
+        legend_region:        'Region',
+        xaxis_date:           'Date',
+        yaxis_date_cumul:     'Cumulative Alert Events',
+        hover_cumulative:     'Cumulative',
+        leadtime_paired_only: 'Paired events only',
+        leadtime_bins:        '30-second bins',
+        leadtime_missile_pairs: 'missile pairs',
+        leadtime_drone_pairs:   'drone pairs',
+        xaxis_leadtime:       'Minutes from Pre-alert to Paired Alert',
+        yaxis_prealerts:      'Number of Pre-alerts',
       }},
       he: {{
         tab_situation: '\u05d7\u05d3\u05e8 \u05de\u05e6\u05d1',
@@ -1398,6 +1410,18 @@ def build_chart(chart_df: pd.DataFrame,
         hover_missile_events: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9',
         popup_daily_dist:     '\u05d4\u05ea\u05e4\u05dc\u05d2\u05d5\u05ea \u05d9\u05d5\u05de\u05d9\u05ea',
         yaxis_alert_events:   '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4',
+        xaxis_hour:           '\u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd',
+        yaxis_hour:           '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4',
+        legend_region:        '\u05d0\u05d6\u05d5\u05e8',
+        xaxis_date:           '\u05ea\u05d0\u05e8\u05d9\u05da',
+        yaxis_date_cumul:     '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd',
+        hover_cumulative:     '\u05de\u05e6\u05d8\u05d1\u05e8',
+        leadtime_paired_only: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d5\u05ea\u05d0\u05de\u05d9\u05dd \u05d1\u05dc\u05d1\u05d3',
+        leadtime_bins:        '\u05e8\u05e6\u05d5\u05e2\u05d5\u05ea 30 \u05e9\u05e0\u05d9\u05d5\u05ea',
+        leadtime_missile_pairs: '\u05d6\u05d5\u05d2\u05d5\u05ea \u05d8\u05d9\u05dc',
+        leadtime_drone_pairs:   '\u05d6\u05d5\u05d2\u05d5\u05ea \u05e8\u05d7\u05e4\u05df',
+        xaxis_leadtime:       '\u05d3\u05e7\u05d5\u05ea \u05de\u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05e2\u05d3 \u05d0\u05d6\u05e2\u05e7\u05ea \u05d8\u05d9\u05dc',
+        yaxis_prealerts:      '\u05de\u05e1\u05e4\u05e8 \u05db\u05d5\u05e0\u05e0\u05d5\u05d9\u05d5\u05ea',
       }},
     }};
 
@@ -2042,9 +2066,9 @@ def build_chart(chart_df: pd.DataFrame,
       var nDrone   = droneMin.length;
       var regionDisplay = region ? (_isHe ? (REGION_HE[region] || region) : region) : '';
       var regionLabel = regionDisplay ? ' \u2014 ' + regionDisplay : '';
-      var subtitle = 'Paired events only · 30-second bins · '
-        + nMissile.toLocaleString() + ' missile pairs'
-        + (nDrone ? ', ' + nDrone.toLocaleString() + ' drone pairs' : '');
+      var subtitle = _T.leadtime_paired_only + ' \u00b7 ' + _T.leadtime_bins + ' \u00b7 '
+        + nMissile.toLocaleString() + ' ' + _T.leadtime_missile_pairs
+        + (nDrone ? ', ' + nDrone.toLocaleString() + ' ' + _T.leadtime_drone_pairs : '');
 
       var viewEl = document.getElementById('view-leadtime');
       var viewH  = viewEl.offsetHeight || (window.innerHeight - 46);
@@ -2059,13 +2083,13 @@ def build_chart(chart_df: pd.DataFrame,
           x: 0.5, font: {{size: isMobile() ? 12 : 15, color: theme.text}},
         }},
         xaxis: Object.assign({{
-          title: 'Minutes from Pre-alert to Paired Alert',
+          title: _T.xaxis_leadtime,
           dtick: 1,
           showgrid: true, gridcolor: theme.grid,
           zeroline: false, color: theme.text,
         }}, isMobile() ? {{}} : {{range: [0, 15]}}),
         yaxis: {{
-          title: 'Number of Pre-alerts',
+          title: _T.yaxis_prealerts,
           showgrid: true, gridcolor: theme.grid,
           zeroline: false, color: theme.text,
         }},
@@ -2454,6 +2478,30 @@ def build_chart(chart_df: pd.DataFrame,
         var dateEl2 = document.getElementById('date-full-chart');
         if (dateEl2 && dateEl2.data && dateEl2.data.length) {{
           Plotly.relayout('date-full-chart', {{'title.text': T.title_date}});
+        }}
+      }} catch(e) {{}}
+
+      // Translate By Hour axis labels (mutate hourLayout so updateHourChart picks them up)
+      if (hourLayout.xaxis) hourLayout.xaxis = Object.assign({{}}, hourLayout.xaxis, {{title: T.xaxis_hour}});
+      if (hourLayout.yaxis) hourLayout.yaxis = Object.assign({{}}, hourLayout.yaxis, {{title: T.yaxis_hour}});
+      if (hourLayout.legend && hourLayout.legend.title) hourLayout.legend.title.text = T.legend_region;
+      updateHourChart();
+
+      // Translate By Date axis labels, hovertemplates, and end-of-line region labels
+      try {{
+        var _dateEl = document.getElementById('date-full-chart');
+        if (_dateEl && _dateEl.data && _dateEl.data.length) {{
+          var _newHTs   = dateData.map(function(tr) {{
+            var _disp = isHe ? (REGION_HE[tr.name] || tr.name) : tr.name;
+            return '<b>' + _disp + '</b><br>%{{x}}<br>' + T.hover_cumulative + ': <b>%{{customdata[1]:,}}</b> (+%{{customdata[0]:,}})<extra></extra>';
+          }});
+          var _newTexts = dateData.map(function(tr) {{
+            var _disp = isHe ? (REGION_HE[tr.name] || tr.name) : tr.name;
+            var _n = (tr.x || []).length;
+            return Array(_n > 1 ? _n - 1 : 0).fill('').concat(_n > 0 ? [_disp] : []);
+          }});
+          Plotly.restyle('date-full-chart', {{hovertemplate: _newHTs, text: _newTexts}});
+          Plotly.relayout('date-full-chart', {{'xaxis.title': T.xaxis_date, 'yaxis.title': T.yaxis_date_cumul}});
         }}
       }} catch(e) {{}}
 
