@@ -1016,7 +1016,7 @@ def build_chart(chart_df: pd.DataFrame,
     body.dark .sit-explainer {{ color: #666; border-color: #2a2a3e; }}
 
     /* ── RTL (Hebrew) ── */
-    :root[dir=rtl] #nav-tabs {{ flex-direction: row-reverse; }}
+    :root[dir=rtl] #nav-tabs {{ flex-direction: row; }}
     :root[dir=rtl] #nav-row  {{ flex-direction: row; }}
 
     /* ── Modal ── */
@@ -2415,7 +2415,7 @@ def build_chart(chart_df: pd.DataFrame,
 
       // RTL nav layout (explicit JS override — CSS :root[dir=rtl] may race on first paint)
       document.getElementById('nav-row').style.flexDirection  = isHe ? 'row' : '';
-      document.getElementById('nav-tabs').style.flexDirection = isHe ? 'row-reverse' : '';
+      document.getElementById('nav-tabs').style.flexDirection = isHe ? 'row' : '';
       var _fr = document.getElementById('filter-row');
       if (_fr) _fr.style.flexDirection = isHe ? 'row-reverse' : '';
 
