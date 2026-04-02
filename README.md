@@ -76,10 +76,23 @@ Alerts fired to the same zone within **90 seconds** of each other are treated as
 pip install -r requirements.txt
 
 # Run (fetches latest data from GitHub or uses local file in data/)
-python main.py
+python3 main.py
 
 # Open the dashboard
 open output/index.html
+```
+
+For faster style-only rebuilds (no network, reads cached `data/processed.json`):
+
+```bash
+python3 build_chart.py
+open output/index.html
+```
+
+To override the monitoring start date without editing code:
+
+```bash
+ALERT_CUTOFF_DATE=2026-01-01 python3 main.py
 ```
 
 ## Data sources
@@ -98,6 +111,35 @@ City → zone mapping is fetched automatically from
 
 Zones come directly from the official Homefront Command taxonomy.
 Display regions (e.g. "Galilee", "Jerusalem", "Gaza Area") are used for chart colouring only.
+
+## Recent improvements
+
+### Performance
+- Replaced all `iterrows()` loops with `itertuples()` in the core processing pipeline
+  (`aggregate`, `compute_mismatches`, `compute_salvos`) — approximately 10× faster on
+  large DataFrames
+- Vectorized `build_gap_hist()`, `_normalise_df()` datetime parsing, and the
+  `compute_situation()` period filter using pandas boolean indexing
+
+### Data integrity
+- `CUTOFF_DATE` is now overridable via `ALERT_CUTOFF_DATE` environment variable
+- `partial_hour` annotation now uses `Asia/Jerusalem` timezone (`zoneinfo`) instead of
+  the local system clock
+- Missing-timestamp rows in `aggregate()` and `compute_mismatches()` now emit a warning
+  with a count rather than silently disappearing
+- Unrecognised alert type names now surface a console warning
+- Hour-bounds guard (`0–23`) prevents an `IndexError` crash in `compute_situation()`
+
+### Charts & UI
+- **Salvos** chart: lines are now straight segments (`shape: 'linear'`) — spline
+  smoothing was implying continuous values between discrete hourly data points
+- **Mismatches** % view: right-axis (7-day rolling %) now has grey ticks and a `%`
+  suffix to visually distinguish it from the left-side event count axis
+- Nav tab buttons now carry `role="tab"`, `aria-selected`, and `aria-controls` ARIA
+  attributes; `aria-expanded` on the hamburger button is kept in sync by JavaScript
+- `:focus-visible` CSS rings added to all toolbar buttons and the modal close button
+  for keyboard navigation
+- ESC key now closes any open drill-down modal
 
 ## Requirements
 

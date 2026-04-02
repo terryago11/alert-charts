@@ -27,7 +27,7 @@ open output/ira_alerts.html
 
 | Source | How to configure |
 |--------|-----------------|
-| GitHub CSV (live) | Fetched automatically from `dleshem/israel-alerts-data`; set `CUTOFF_DATE` in `main.py` to adjust the start of the monitoring period |
+| GitHub CSV (live) | Fetched automatically from `dleshem/israel-alerts-data`; set `ALERT_CUTOFF_DATE` env var (or fall back to hardcoded `CUTOFF_DATE` in `main.py`) to adjust the start of the monitoring period |
 | Local file (fallback) | Place any `.xlsx`, `.xls`, or `.csv` in `data/` |
 
 Alert data must have columns for city/location, date+time, and alert type.
@@ -132,3 +132,51 @@ individual city-level alerts.
   template: Python collapses `\'` → `'`, producing adjacent string literals and a JS syntax
   error. Use `data-*` attributes on the element and read them via `this.dataset.*` in the
   onclick handler instead.
+- Use `itertuples(index=False)` instead of `iterrows()` for all row-level loops over large
+  DataFrames (`aggregate`, `compute_mismatches`, `compute_salvos`, `compute_situation`).
+  `iterrows()` creates a full copy of each row as a Series; `itertuples()` is ~10× faster.
+- `partial_hour` must be derived from `Asia/Jerusalem` time (via `zoneinfo.ZoneInfo`),
+  not the local clock, so the partial-day annotation matches the Israel-time display in JS.
+
+## Roadmap
+
+Planned improvements, grouped by PR. Each can be a standalone session.
+
+### PR: Security & Accessibility
+- **XSS hardening** — audit all `.innerHTML` assignments in the JS template; replace with
+  `.textContent` for plain strings. Currently safe (translations are hardcoded), but latent
+  risk if translations ever come from an external source. (`main.py` ~lines 2555, 2597–2613)
+- **Color contrast** — several light region colors in `regions.py` (`GROUP_COLORS`) fail
+  WCAG AA on white backgrounds: `#aec7e8` (Sharon), `#98df8a` (Galilee), `#56aeff` (Tel Aviv).
+  Sublabel/footer text (`#888`) is borderline. Darken for light-mode labels.
+- **Active filter badge** — when a date-from/to filter is non-default, show a small pill
+  (e.g. "Filtered: Mar 1 – Mar 15") in the filter row so users know a filter is active.
+
+### PR: New Visualizations
+- **Day-of-week heatmap** — rows = Mon–Sun, columns = regions (or alert type), cells =
+  average event count. Reveals weekly attack-timing patterns not visible in the current charts.
+- **Daily new + 7-day rolling average** — a "daily new alert events" line chart (non-cumulative
+  version of By Date) with a 7-day rolling average overlay to show trend direction clearly.
+- **Per-region lead time** — the Lead Time histogram currently aggregates all regions.
+  Add a small-multiples or faceted view breaking it down per region.
+- **Alert-type breakdown** — a donut or treemap showing the proportional split of Missile /
+  Pre-alert / Drone across the full dataset.
+- **Salvo size distribution** — `compute_salvos()` already produces `cluster_size` (events per
+  cluster). Add a histogram showing how often salvos have 2 vs 5 vs 10+ events.
+
+### PR: Refactor
+- **Split `main.py`** (~2,900 lines) into focused modules:
+  - `data_loader.py` — `load_alerts()`, `_normalise_df()`, `load_city_data()`, `fetch_github_csv()`
+  - `aggregator.py` — `aggregate()`, `compute_mismatches()`, `compute_salvos()`, `compute_situation()`
+  - `chart_builder.py` — the `build_chart()` function (~2,000 lines of HTML/JS template)
+  - Keep `main.py` as a thin entry point that orchestrates the above.
+
+### PR: Tests
+- **`cluster_events()`** — edge cases: empty list, single item, all within window, gap exactly
+  equal to `EVENT_CLUSTER_WINDOW`, gap just over it.
+- **`compute_mismatches()`** — pairing boundary conditions: pre-alert at t=0 / missile at
+  t=15:00 (should pair), t=15:01 (should not); city with only pre-alerts; only missiles.
+- **`compute_salvos()`** — zone with a single event; events spanning midnight (date boundary).
+- **`_normalise_df()`** — column detection with Hebrew headers, missing datetime column,
+  mixed-format dates.
+- Use `pytest`; add a `tests/` directory with small fixture DataFrames (no network calls).
