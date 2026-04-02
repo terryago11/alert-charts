@@ -1044,10 +1044,10 @@ def build_chart(chart_df: pd.DataFrame,
     .sit-section {{ margin-bottom: 28px; }}
     .sit-section-title {{ font-size: 15px; font-weight: 700; margin-bottom: 6px; color: #4455cc; }}
     body.dark .sit-section-title {{ color: #7788ee; }}
-    .sit-sublabel {{ font-size: 11px; color: #888; margin-bottom: 8px; }}
+    .sit-sublabel {{ font-size: 11px; color: #666; margin-bottom: 8px; }}
     .sit-summary {{ font-size: 13px; color: #444; margin-bottom: 12px; line-height: 1.6; }}
     body.dark .sit-summary {{ color: #aaa; }}
-    .sit-quiet {{ font-style: italic; color: #888; }}
+    .sit-quiet {{ font-style: italic; color: #666; }}
     /* ── Situation Room timeline ── */
     .sit-timeline {{ display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }}
     .sit-tl-row {{
@@ -1078,7 +1078,7 @@ def build_chart(chart_df: pd.DataFrame,
     #global-footer {{
       position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
       padding: 5px 16px; font-size: 11px; text-align: center;
-      background: rgba(245,245,252,0.93); color: #888;
+      background: rgba(245,245,252,0.93); color: #666;
       border-top: 1px solid #e0e0e8; backdrop-filter: blur(4px);
     }}
     body.dark #global-footer {{
@@ -1093,7 +1093,7 @@ def build_chart(chart_df: pd.DataFrame,
     body.light .view-explainer {{ color: #666; border-color: #e0e0e8; background: rgba(245,245,252,0.92); }}
     body.dark  .view-explainer {{ color: #888; border-color: #2a2a3e; background: rgba(10,10,28,0.92); }}
     .sit-explainer {{
-      font-size: 11px; color: #888; text-align: center;
+      font-size: 11px; color: #666; text-align: center;
       padding: 12px 0 4px; border-top: 1px solid #e0e0e8; margin-top: 8px; line-height: 1.5;
     }}
     body.dark .sit-explainer {{ color: #666; border-color: #2a2a3e; }}
@@ -2575,7 +2575,7 @@ def build_chart(chart_df: pd.DataFrame,
       }});
 
       html += '<div class="sit-explainer">' + T.explainer_situation + '</div>';
-      el.innerHTML = html;
+      el.innerHTML = html;  // T.* values are hardcoded strings — intentional innerHTML (structured HTML)
     }}
 
     // ── Dark / light toggle ─────────────────────────────────────────────────
@@ -2615,14 +2615,19 @@ def build_chart(chart_df: pd.DataFrame,
       var _fr = document.getElementById('filter-row');
       if (_fr) _fr.style.flexDirection = isHe ? 'row' : '';
 
-      // Tab buttons (preserve leading icon)
+      // Tab buttons: icon is a safe hardcoded HTML entity; label uses textContent to prevent XSS
       var tabIcons = {{ situation: '&#9889;', hour: '&#9200;', date: '&#128197;', mismatch: '&#9888;&#65039;', leadtime: '&#9203;', salvos: '&#128165;' }};
-      document.getElementById('btn-situation').innerHTML = tabIcons.situation + '&nbsp;' + T.tab_situation;
-      document.getElementById('btn-hour').innerHTML      = tabIcons.hour      + '&nbsp;' + T.tab_hour;
-      document.getElementById('btn-date').innerHTML      = tabIcons.date      + '&nbsp;' + T.tab_date;
-      document.getElementById('btn-mismatch').innerHTML  = tabIcons.mismatch  + '&nbsp;' + T.tab_mismatch;
-      document.getElementById('btn-leadtime').innerHTML  = tabIcons.leadtime  + '&nbsp;' + T.tab_leadtime;
-      document.getElementById('btn-salvos').innerHTML    = tabIcons.salvos    + '&nbsp;' + T.tab_salvos;
+      [['btn-situation', tabIcons.situation, T.tab_situation],
+       ['btn-hour',      tabIcons.hour,      T.tab_hour],
+       ['btn-date',      tabIcons.date,      T.tab_date],
+       ['btn-mismatch',  tabIcons.mismatch,  T.tab_mismatch],
+       ['btn-leadtime',  tabIcons.leadtime,  T.tab_leadtime],
+       ['btn-salvos',    tabIcons.salvos,    T.tab_salvos]
+      ].forEach(function(t) {{
+        var el = document.getElementById(t[0]);
+        el.innerHTML = t[1];                              // safe — hardcoded entity only
+        el.appendChild(document.createTextNode('\u00a0' + t[2]));
+      }});
 
       // data-i18n text elements (From:, To:, Pre-alert, Missile & Drone, All regions options)
       document.querySelectorAll('[data-i18n]').forEach(function(el) {{
@@ -2630,7 +2635,7 @@ def build_chart(chart_df: pd.DataFrame,
         if (T[key] !== undefined) el.textContent = T[key];
       }});
 
-      // data-i18n-html explainer divs
+      // data-i18n-html explainer divs — intentional innerHTML (translations contain safe markup e.g. <br>, &middot;)
       document.querySelectorAll('[data-i18n-html]').forEach(function(el) {{
         var key = el.getAttribute('data-i18n-html');
         if (T[key] !== undefined) el.innerHTML = T[key];

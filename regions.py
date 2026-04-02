@@ -85,11 +85,11 @@ ZONE_GROUP: dict[str, str] = {
 
 GROUP_COLORS: dict[str, str] = {
     "Golan":                "#2ca02c",   # dark green
-    "Galilee":              "#98df8a",   # light green
+    "Galilee":              "#3d8b37",   # dark green (was #98df8a — failed WCAG AA)
     "Haifa Area":           "#17becf",   # teal
     "West Bank":            "#9467bd",   # purple
-    "Tel Aviv / Gush Dan":  "#56aeff",   # bright sky blue
-    "Sharon / Shephelah":   "#aec7e8",   # pale blue
+    "Tel Aviv / Gush Dan":  "#1a6bc9",   # medium blue (was #56aeff — failed WCAG AA)
+    "Sharon / Shephelah":   "#4a7bb5",   # medium blue (was #aec7e8 — failed WCAG AA)
     "Jerusalem":            "#f5c542",   # gold
     "Gaza Area":            "#d62728",   # red
     "Beer Sheva / Negev":   "#ff7f0e",   # orange
