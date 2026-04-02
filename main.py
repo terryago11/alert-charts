@@ -944,7 +944,7 @@ def build_chart(chart_df: pd.DataFrame,
     body.dark #nav-tabs .tb-btn:hover {{ background: rgba(68,85,204,0.15); color: #ccc; border-color: #444 #444 transparent; }}
     body.dark #nav-tabs .tb-btn.active {{ background: rgba(10,10,28,0.95); color: #7788ee; border-color: #444 #444 transparent; border-bottom: 2px solid #7788ee; }}
 
-    #sep {{ width: 1px; height: 22px; background: #ccc; margin: 0 4px; flex-shrink:0; }}
+    #sep {{ display: none; width: 1px; height: 22px; background: #ccc; margin: 0 4px; flex-shrink:0; }}
     body.dark #sep {{ background: #333; }}
     /* ── Chart area ── */
     #view-hour, #view-date, #view-mismatch, #view-leadtime, #view-salvos {{
