@@ -1317,7 +1317,7 @@ def build_chart(chart_df: pd.DataFrame,
         btn_pre: 'Pre-alert', btn_missile: 'Missile \u0026 Drone',
         btn_dark: '\U0001F319\u00a0Dark', btn_light: '\u2600\ufe0f\u00a0Light',
         btn_lang: '\u05e2\u05d1',
-        lbl_from: 'From:', lbl_to: 'To:', lbl_all_regions: 'All regions',
+        lbl_from: 'From:', lbl_to: 'To:', lbl_all_regions: 'All regions', lbl_all_dates: 'All',
         sit_lastnight_title: 'What happened last night?',
         sit_today_title: 'What\u2019s happening today?',
         sit_quiet: 'Quiet \u2014 no alerts recorded for this period.',
@@ -1383,12 +1383,13 @@ def build_chart(chart_df: pd.DataFrame,
         btn_lang: 'EN',
         lbl_from: '\u05de:',
         lbl_to: '\u05e2\u05d3:',
-        lbl_all_regions: '\u05d4\u05db\u05dc',
+        lbl_all_regions: '\u05db\u05dc \u05d4\u05d0\u05d6\u05d5\u05e8\u05d9\u05dd',
+        lbl_all_dates: '\u05d4\u05db\u05dc',
         sit_lastnight_title: '\u05de\u05d4 \u05e7\u05e8\u05d4 \u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4?',
         sit_today_title: '\u05de\u05d4 \u05e7\u05d5\u05e8\u05d4 \u05d4\u05d9\u05d5\u05dd?',
         sit_quiet: '\u05e9\u05e7\u05d8 \u2014 \u05dc\u05d0 \u05e0\u05e8\u05e9\u05de\u05d5 \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05ea\u05e7\u05d5\u05e4\u05d4 \u05d6\u05d5.',
-        title_hour: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4',
-        title_date: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8',
+        title_hour: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4<br><sup>\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2 (90\u05e9) \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8</sup>',
+        title_date: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8<br><sup>\u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2 \u05dc\u05d0\u05d6\u05d5\u05e8 (90\u05e9) \u00b7 \u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05e4\u05d9\u05dc\u05d8\u05e8\u05d9 \u05d4\u05ea\u05d0\u05e8\u05d9\u05da \u05dc\u05d6\u05d5\u05dd</sup>',
         explainer_hour: '\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd (\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3) \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
         explainer_date: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u05de\u05d0\u05d6 28 \u05e4\u05d1\u05e8\u05d5\u05d0\u05e8 2026 \u00b7 \u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3',
         explainer_mismatch: '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea <strong>\u05de\u05d5\u05ea\u05d0\u05de\u05ea</strong> = \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05d1\u05ea\u05d5\u05da 15\u2009\u05d3\u05e7 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 \u00b7 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05d1\u05dc\u05d1\u05d3 = \u05d0\u05d6\u05d4\u05e8\u05d4 \u05dc\u05dc\u05d0 \u05d8\u05d9\u05dc \u00b7 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3 = \u05d8\u05d9\u05dc \u05dc\u05dc\u05d0 \u05d0\u05d6\u05d4\u05e8\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u00b7 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05dc\u05d0 \u05e0\u05db\u05dc\u05dc\u05d9\u05dd \u00b7 \u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5 = % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9',
@@ -2486,25 +2487,18 @@ def build_chart(chart_df: pd.DataFrame,
       VIEW_LABELS.leadtime  = T.tab_leadtime;
       VIEW_LABELS.salvos    = T.tab_salvos;
 
-      // Plotly chart title updates
-      try {{
-        var mainEl = document.getElementById('main-chart');
-        if (mainEl && mainEl.data && mainEl.data.length) {{
-          Plotly.relayout('main-chart', {{'title.text': T.title_hour}});
-        }}
-        var dateEl2 = document.getElementById('date-full-chart');
-        if (dateEl2 && dateEl2.data && dateEl2.data.length) {{
-          Plotly.relayout('date-full-chart', {{'title.text': T.title_date}});
-        }}
-      }} catch(e) {{}}
-
-      // Translate By Hour axis labels (mutate hourLayout so updateHourChart picks them up)
+      // Translate By Hour axis labels + title (mutate hourLayout so updateHourChart and setView pick them up)
+      if (hourLayout.title) hourLayout.title.text = T.title_hour;
       if (hourLayout.xaxis) hourLayout.xaxis = Object.assign({{}}, hourLayout.xaxis, {{title: T.xaxis_hour}});
       if (hourLayout.yaxis) hourLayout.yaxis = Object.assign({{}}, hourLayout.yaxis, {{title: T.yaxis_hour}});
       if (hourLayout.legend && hourLayout.legend.title) hourLayout.legend.title.text = T.legend_region;
       updateHourChart();
 
-      // Translate By Date axis labels, hovertemplates, and end-of-line region labels
+      // Translate By Date title, axis labels, hovertemplates, and end-of-line region labels
+      // Mutate dateLayout so setView('date') re-renders with the correct values
+      if (dateLayout.title) dateLayout.title.text = T.title_date;
+      if (dateLayout.xaxis) dateLayout.xaxis = Object.assign({{}}, dateLayout.xaxis, {{title: T.xaxis_date}});
+      if (dateLayout.yaxis) dateLayout.yaxis = Object.assign({{}}, dateLayout.yaxis, {{title: T.yaxis_date_cumul}});
       try {{
         var _dateEl = document.getElementById('date-full-chart');
         if (_dateEl && _dateEl.data && _dateEl.data.length) {{
@@ -2518,9 +2512,17 @@ def build_chart(chart_df: pd.DataFrame,
             return Array(_n > 1 ? _n - 1 : 0).fill('').concat(_n > 0 ? [_disp] : []);
           }});
           Plotly.restyle('date-full-chart', {{hovertemplate: _newHTs, text: _newTexts}});
-          Plotly.relayout('date-full-chart', {{'xaxis.title': T.xaxis_date, 'yaxis.title': T.yaxis_date_cumul}});
+          Plotly.relayout('date-full-chart', {{'title.text': T.title_date, 'xaxis.title': T.xaxis_date, 'yaxis.title': T.yaxis_date_cumul}});
         }}
       }} catch(e) {{}}
+
+      // Translate "All" option in date From/To selectors
+      ['hour-date-from','hour-date-to','date-view-from','date-view-to','salvos-date-from','salvos-date-to'].forEach(function(selId) {{
+        var _ds = document.getElementById(selId);
+        if (!_ds) return;
+        var _allOpt = _ds.querySelector('option[value=""]');
+        if (_allOpt) _allOpt.textContent = T.lbl_all_dates;
+      }});
 
       // Rebuild dynamic views
       if (currentView === 'situation') buildSituationView();
