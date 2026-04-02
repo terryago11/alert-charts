@@ -48,8 +48,9 @@ ALERT_TRANSLATIONS = {
 
 DATA_DIR    = Path("data")
 OUTPUT_DIR  = Path("output")
-PAIR_WINDOW  = timedelta(minutes=15)   # max gap between pre-alert and missile alert
-SALVO_WINDOW = timedelta(minutes=30)   # max consecutive gap within a salvo cluster
+PAIR_WINDOW       = timedelta(minutes=15)   # max gap between pre-alert and missile alert
+SALVO_WINDOW      = timedelta(minutes=30)   # max consecutive gap within a salvo cluster
+MISMATCH_LOOKBACK = timedelta(minutes=30)   # re-examine window to catch cross-boundary pairs
 
 
 # ── City / Zone helpers ───────────────────────────────────────────────────────
@@ -530,8 +531,12 @@ def merge_chart_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame
 
 
 def merge_mismatch(existing_agg: list, existing_gap_m: dict, existing_gap_d: dict,
-                   new_mismatch_df: pd.DataFrame) -> tuple:
-    """Merge new mismatch rows into existing aggregated counts and gap histograms."""
+                   new_mismatch_df: pd.DataFrame, lookback_dates=None) -> tuple:
+    """Merge new mismatch rows into existing aggregated counts and gap histograms.
+
+    lookback_dates: if provided, existing records for those date_str values are dropped
+    before merging so re-examined boundary events replace rather than add to prior counts.
+    """
     if new_mismatch_df is not None and not new_mismatch_df.empty:
         new_agg_df = (
             new_mismatch_df.groupby(["group", "date_str", "event_type"])
@@ -542,6 +547,10 @@ def merge_mismatch(existing_agg: list, existing_gap_m: dict, existing_gap_d: dic
         new_gap_d = build_gap_hist(new_mismatch_df, "paired_drone")
     else:
         new_agg, new_gap_m, new_gap_d = [], {}, {}
+
+    # Strip existing records for the lookback window — they'll be replaced by new_agg.
+    if lookback_dates:
+        existing_agg = [r for r in existing_agg if r["date_str"] not in lookback_dates]
 
     # Merge agg: sum counts per (group, date_str, event_type)
     combined: dict = {}
@@ -2549,26 +2558,12 @@ def build_chart(chart_df: pd.DataFrame,
       var parts = [];
       try {{
         var now = new Date();
-        // Situation data
-        var sitSrc = (typeof situFetchedAt !== 'undefined' && situFetchedAt) ? situFetchedAt : fetchedAt;
-        var sitD   = new Date(sitSrc);
-        var sitDate = sitD.toLocaleDateString('en-GB', {{day:'2-digit', month:'long', year:'numeric', timeZone:ILtz}});
-        var sitTime = sitD.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
-        var nextSit = new Date(Math.ceil(now.getTime() / 1800000) * 1800000);
-        var nextSitIL = nextSit.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
-        parts.push('Situation data fetched ' + sitDate + ' at ' + sitTime + ' Israel time (next refresh at ' + nextSitIL + ' Israel time)');
-        // Full charts
-        var fullD    = new Date(fetchedAt);
-        var fullDate = fullD.toLocaleDateString('en-GB', {{day:'2-digit', month:'long', year:'numeric', timeZone:ILtz}});
-        var fullTime = fullD.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
-        var runHours = [3, 9, 15, 21];
-        var nowUTCm  = now.getUTCHours() * 60 + now.getUTCMinutes();
-        var nextH    = runHours.find(function(h) {{ return h * 60 > nowUTCm; }});
-        var nextFull = (nextH !== undefined)
-          ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH))
-          : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 3));
-        var nextFullIL = nextFull.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
-        parts.push('Full charts fetched ' + fullDate + ' at ' + fullTime + ' Israel time (next refresh at ' + nextFullIL + ' Israel time)');
+        var d    = new Date(fetchedAt);
+        var dStr = d.toLocaleDateString('en-GB', {{day:'2-digit', month:'long', year:'numeric', timeZone:ILtz}});
+        var tStr = d.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        var nextRefresh = new Date(Math.ceil(now.getTime() / 1800000) * 1800000);
+        var nextIL = nextRefresh.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        parts.push('Data fetched ' + dStr + ' at ' + tStr + ' Israel time (next refresh at ' + nextIL + ' Israel time)');
       }} catch(e) {{}}
       parts.push('Built by Ira and Natan Skop with some help from Claude Code');
       el.textContent = parts.join(' \u00b7 ');
@@ -2649,17 +2644,28 @@ def main() -> None:
         print("\nDone.  Open output/index.html in your browser.")
         return
 
-    # 4. Download CSV — incremental if we have a prior full-build timestamp
+    # 4. Download CSV — incremental if we have a prior full-build timestamp.
+    # Fetch from (since_dt - MISMATCH_LOOKBACK) so that compute_mismatches() can
+    # re-examine the boundary window and catch Pre-alert / Missile pairs that
+    # straddled two consecutive runs.
     since_dt = pd.Timestamp(existing["fetched_at"]) if existing else None
-    raw = fetch_github_csv(since_dt=since_dt)
+    mismatch_since_dt = (since_dt - MISMATCH_LOOKBACK) if since_dt is not None else None
+    raw = fetch_github_csv(since_dt=mismatch_since_dt)
     if raw is not None:
-        df = _normalise_df(raw)
+        df_extended = _normalise_df(raw)
+        # Chart aggregation uses only strictly new rows (same behaviour as before)
+        if since_dt is not None:
+            _since_naive = since_dt.tz_convert(None) if since_dt.tzinfo else since_dt
+            df = df_extended[df_extended["dt"] > _since_naive].copy()
+        else:
+            df = df_extended
     else:
         data_file = find_data_file()
         if data_file is None:
             print("\nNo data found. Place an .xlsx/.csv in data/ or check network.")
             sys.exit(1)
         df = load_alerts(data_file)
+        df_extended = df
 
     # 5. Aggregate new rows
     print("\nAggregating alerts by zone …")
@@ -2693,9 +2699,11 @@ def main() -> None:
     # 6. Summary table
     print_summary(zone_total, zone_night)
 
-    # 7. Pre-alert / missile mismatch analysis (new rows only; merge with existing)
+    # 7. Pre-alert / missile mismatch analysis.
+    # Uses df_extended (lookback + new rows) so pairs that straddle two consecutive
+    # incremental batches are correctly matched.
     print("\nComputing pre-alert / missile mismatches …")
-    new_mismatch_df = compute_mismatches(df, city_to_zone)
+    new_mismatch_df = compute_mismatches(df_extended, city_to_zone)
     if not new_mismatch_df.empty:
         counts = new_mismatch_df["event_type"].value_counts()
         for et in ALL_EVENT_TYPES:
@@ -2705,11 +2713,25 @@ def main() -> None:
         new_mismatch_df.to_excel(xlsx_path, index=False)
         print(f"  Saved → {xlsx_path}")
 
+    # Calendar dates covered by the lookback window; existing mismatch_agg records for
+    # those dates are replaced rather than summed (avoids double-counting re-examined events).
+    if since_dt is not None and mismatch_since_dt is not None:
+        _lb_start = mismatch_since_dt.date() if hasattr(mismatch_since_dt, "date") else mismatch_since_dt.to_pydatetime().date()
+        _lb_end   = since_dt.date()          if hasattr(since_dt, "date")          else since_dt.to_pydatetime().date()
+        lookback_dates: set = set()
+        _d = _lb_start
+        while _d <= _lb_end:
+            lookback_dates.add(_d.isoformat())
+            _d += timedelta(days=1)
+    else:
+        lookback_dates = None
+
     mismatch_agg, gap_missile_h, gap_drone_h = merge_mismatch(
         existing.get("mismatch_agg", []) if existing else [],
         existing.get("gap_missile_hist", {}) if existing else {},
         existing.get("gap_drone_hist", {}) if existing else {},
         new_mismatch_df,
+        lookback_dates=lookback_dates,
     )
 
     # 8. Save processed data (v2 schema, incremental)
