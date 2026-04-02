@@ -36,7 +36,7 @@ CITIES_JSON_URL = (
 GITHUB_CSV_URL      = "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
 GITHUB_CONTENTS_API = "https://api.github.com/repos/dleshem/israel-alerts-data/contents/israel-alerts.csv"
 CUTOFF_DATE         = pd.Timestamp("2026-02-28")
-PROCESSED_SCHEMA_VERSION = 3
+PROCESSED_SCHEMA_VERSION = 4
 EVENT_CLUSTER_WINDOW = 90  # seconds — alerts within this window per zone = 1 event
 SITE_URL = "https://terryago11.github.io/alert-charts"
 
@@ -262,6 +262,38 @@ def cluster_events(times: list) -> list:
     return result
 
 
+def compute_global_incidents(zone_clustered: dict) -> "pd.DataFrame":
+    """Cross-zone temporal clustering (same 90 s window).
+
+    Takes the per-zone clustered events and collapses simultaneous alerts across
+    all zones into single global incidents, per alert_type.  Two zone-level events
+    of the same type within EVENT_CLUSTER_WINDOW seconds count as one incident.
+
+    Returns DataFrame [date_str, hour, alert_type, count].
+    """
+    by_type: dict = defaultdict(list)
+    for (_, alert_type), times in zone_clustered.items():
+        by_type[alert_type].extend(times)
+
+    rows: list = []
+    for alert_type, times in by_type.items():
+        for dt in cluster_events(times):
+            rows.append({
+                "date_str":   dt.strftime("%Y-%m-%d"),
+                "hour":       dt.hour,
+                "alert_type": alert_type,
+            })
+
+    if rows:
+        return (
+            pd.DataFrame(rows)
+            .groupby(["date_str", "hour", "alert_type"])
+            .size()
+            .reset_index(name="count")
+        )
+    return pd.DataFrame(columns=["date_str", "hour", "alert_type", "count"])
+
+
 def is_night(hour: Optional[int]) -> bool:
     if hour is None:
         return False
@@ -270,15 +302,17 @@ def is_night(hour: Optional[int]) -> bool:
 
 def aggregate(
     df: pd.DataFrame, city_to_zone: dict
-) -> Tuple[dict, dict, pd.DataFrame]:
+) -> Tuple[dict, dict, pd.DataFrame, pd.DataFrame]:
     """
     Deduplicate using 90-second temporal clustering per (zone, alert_type):
     alerts within EVENT_CLUSTER_WINDOW seconds to the same zone are treated as
     one alert event (e.g. the same missile spreading across nearby cities).
 
-    Returns (zone_total, zone_night, chart_df).
+    Returns (zone_total, zone_night, chart_df, incident_df).
     chart_df has columns [date_str, hour, group, alert_type, count] —
     deduplicated event counts per (date, hour, group, alert_type) cell.
+    incident_df has columns [date_str, hour, alert_type, count] —
+    cross-zone deduplicated incident counts (same 90 s window across all zones).
     """
     # Phase 1: collect raw (zone, alert_type) -> [dt, ...] from all rows
     raw_events: dict = defaultdict(list)
@@ -301,14 +335,21 @@ def aggregate(
         print(f"\n  Note: {len(unmatched)} unmatched city names "
               f"(first 15): {sorted(unmatched)[:15]}")
 
-    # Phase 2: cluster per (zone, alert_type) and emit one row per event
+    # Phase 2: cluster per (zone, alert_type) — zone-level deduplication
+    zone_clustered: dict = {}
+    for (zone, alert_type), times in raw_events.items():
+        zone_clustered[(zone, alert_type)] = cluster_events(times)
+
+    # Global cross-zone deduplication
+    incident_df = compute_global_incidents(zone_clustered)
+
     zone_total = defaultdict(int)
     zone_night = defaultdict(int)
     chart_rows: list = []
 
-    for (zone, alert_type), times in raw_events.items():
+    for (zone, alert_type), clustered_times in zone_clustered.items():
         group = ZONE_GROUP.get(zone, "Other")
-        for dt in cluster_events(times):
+        for dt in clustered_times:
             zone_total[zone] += 1
             if is_night(dt.hour):
                 zone_night[zone] += 1
@@ -329,7 +370,7 @@ def aggregate(
     else:
         chart_df = pd.DataFrame(columns=["date_str", "hour", "group", "alert_type", "count"])
 
-    return dict(zone_total), dict(zone_night), chart_df
+    return dict(zone_total), dict(zone_night), chart_df, incident_df
 
 
 # ── Mismatch analysis ─────────────────────────────────────────────────────────
@@ -530,6 +571,19 @@ def merge_chart_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame
     )
 
 
+def merge_incident_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge new incident_df rows into existing records, re-summing overlapping cells."""
+    if not existing_records:
+        return new_df
+    existing_df = pd.DataFrame(existing_records)
+    combined    = pd.concat([existing_df, new_df], ignore_index=True)
+    return (
+        combined
+        .groupby(["date_str", "hour", "alert_type"], as_index=False)["count"]
+        .sum()
+    )
+
+
 def merge_mismatch(existing_agg: list, existing_gap_m: dict, existing_gap_d: dict,
                    new_mismatch_df: pd.DataFrame, lookback_dates=None) -> tuple:
     """Merge new mismatch rows into existing aggregated counts and gap histograms.
@@ -645,9 +699,10 @@ def save_processed(chart_df: pd.DataFrame,
                    gap_drone_hist: dict,
                    partial_day: Optional[str],
                    partial_hour: Optional[int],
+                   incident_df: Optional[pd.DataFrame] = None,
                    fetched_at: Optional[str] = None,
                    csv_sha: Optional[str] = None) -> None:
-    """Serialise aggregated data to data/processed.json (schema v2) for build_chart.py."""
+    """Serialise aggregated data to data/processed.json for build_chart.py."""
     DATA_DIR.mkdir(exist_ok=True)
     payload = {
         "schema_version":  PROCESSED_SCHEMA_VERSION,
@@ -656,6 +711,7 @@ def save_processed(chart_df: pd.DataFrame,
         "partial_day":     partial_day,
         "partial_hour":    partial_hour,
         "chart_df":        chart_df.to_dict(orient="records"),
+        "incident_df":     incident_df.to_dict(orient="records") if incident_df is not None else [],
         "mismatch_agg":    mismatch_agg,
         "gap_missile_hist": gap_missile_hist,
         "gap_drone_hist":   gap_drone_hist,
@@ -698,7 +754,8 @@ def build_chart(chart_df: pd.DataFrame,
                 gap_drone_hist: Optional[dict] = None,
                 partial_day: Optional[str] = None, partial_hour: Optional[int] = None,
                 situation_data: Optional[dict] = None,
-                fetched_at: Optional[str] = None) -> None:
+                fetched_at: Optional[str] = None,
+                incident_df: Optional[pd.DataFrame] = None) -> None:
     """
     Full-screen interactive chart with three views toggled by a tab bar:
 
@@ -832,6 +889,11 @@ def build_chart(chart_df: pd.DataFrame,
     mismatch_records_js = json.dumps(mismatch_agg or [])
     gap_missile_js      = json.dumps(gap_missile_hist or {})
     gap_drone_js        = json.dumps(gap_drone_hist   or {})
+
+    # ── Incident data (cross-zone deduplication) ──────────────────────────────
+    incident_js = json.dumps(
+        incident_df.to_dict(orient="records") if incident_df is not None and not incident_df.empty else []
+    )
 
     # ── Situation Room data ───────────────────────────────────────────────────
     _empty_period = {"label": "", "start_iso": "", "end_iso": "",
@@ -1278,6 +1340,7 @@ def build_chart(chart_df: pd.DataFrame,
   <script>
     // ── Data ────────────────────────────────────────────────────────────────
     var hourlyData   = {hourly_js};
+    var incidentData = {incident_js};
     var groupColors  = {group_colors_js};
     var allGroups    = {groups_js};
     var allTypes     = {alert_types_js};
@@ -1704,11 +1767,38 @@ def build_chart(chart_df: pd.DataFrame,
         }};
       }});
 
-      // Lock Y-axis scale so legend clicks don't rescale
+      // Lock Y-axis scale from bar traces only (before adding scatter)
       var maxY = 0;
       for (var h = 0; h < 24; h++) {{
         var s = 0; newTraces.forEach(function(t) {{ s += t.y[h] || 0; }}); maxY = Math.max(maxY, s);
       }}
+
+      // Add total-incidents dotted line (hidden when region filter is active)
+      if (!hourRegion) {{
+        var incFiltered = incidentData.filter(function(r) {{
+          var dateOk = !currentDateRange ||
+            (r.date_str >= currentDateRange[0] && r.date_str <= currentDateRange[1]);
+          var typeOk = activeTypeMode === 'pre'
+            ? r.alert_type === 'Pre-alert'
+            : r.alert_type !== 'Pre-alert';
+          return dateOk && typeOk;
+        }});
+        var incAgg = {{}};
+        incFiltered.forEach(function(r) {{ incAgg[r.hour] = (incAgg[r.hour] || 0) + r.count; }});
+        var incYs = Array.from({{length:24}}, function(_, h) {{ return incAgg[h] || 0; }});
+        newTraces.push({{
+          type: 'scatter',
+          mode: 'lines+markers',
+          x: Array.from({{length:24}}, function(_, h) {{ return h; }}),
+          y: incYs,
+          name: 'Total Incidents',
+          line: {{ dash: 'dot', color: '#ffffff', width: 1.5 }},
+          marker: {{ size: 4, color: '#ffffff', opacity: 0.8 }},
+          opacity: 0.7,
+          hovertemplate: 'Total Incidents<br>%{{x:02d}}:00 \u2014 <b>%{{y:,}}</b><extra></extra>',
+        }});
+      }}
+
       var lockedLayout = Object.assign({{}}, hourLayout, {{
         yaxis: Object.assign({{}}, hourLayout.yaxis, {{autorange: false, range: [0, maxY * 1.1 || 10]}})
       }});
@@ -2295,15 +2385,18 @@ def build_chart(chart_df: pd.DataFrame,
         for (var h2 = 0; h2 < endHour; h2++) pairs.push({{ds: endDate, h: h2}});
       }}
 
-      // Aggregate hourlyData for each pair
+      // Badge counts from incidentData (globally deduplicated); dots from hourlyData
       var rows = [];
       pairs.forEach(function(pair) {{
         var missile = 0, pre = 0, drone = 0, regions = {{}};
-        hourlyData.forEach(function(r) {{
+        incidentData.forEach(function(r) {{
           if (r.date_str !== pair.ds || r.hour !== pair.h) return;
           if      (r.alert_type === 'Missile alert') missile += r.count;
           else if (r.alert_type === 'Pre-alert')     pre     += r.count;
           else if (r.alert_type === 'Drone alert')   drone   += r.count;
+        }});
+        hourlyData.forEach(function(r) {{
+          if (r.date_str !== pair.ds || r.hour !== pair.h) return;
           regions[r.group] = (regions[r.group] || 0) + r.count;
         }});
         if (missile + pre + drone > 0)
@@ -2318,9 +2411,9 @@ def build_chart(chart_df: pd.DataFrame,
         html += '<div class="sit-tl-row" data-ds="' + row.ds + '" data-h="' + row.h + '" data-sect="' + sectionTitle + '" onclick="openHourModal(this.dataset.ds,+this.dataset.h,this.dataset.sect)">';
         html += '<span class="sit-tl-time">' + timeStr + '</span>';
         html += '<div class="sit-tl-types">';
-        if (row.missile) html += '<span class="sit-badge sit-badge-missile" title="missile alert events (same zone within 90s = 1 event)">🚀\u202F' + row.missile + '</span>';
-        if (row.pre)     html += '<span class="sit-badge sit-badge-pre" title="pre-alert events">\u26A1\u202F'           + row.pre     + '</span>';
-        if (row.drone)   html += '<span class="sit-badge sit-badge-drone" title="drone alert events (same zone within 90s = 1 event)">🛩\u202F'   + row.drone   + '</span>';
+        if (row.pre)     html += '<span class="sit-badge sit-badge-pre"     title="pre-alert incidents">\u26A1\u202F'    + row.pre     + '</span>';
+        if (row.missile) html += '<span class="sit-badge sit-badge-missile" title="missile incidents">🚀\u202F'           + row.missile + '</span>';
+        if (row.drone)   html += '<span class="sit-badge sit-badge-drone"   title="drone incidents">🛩\u202F'             + row.drone   + '</span>';
         html += '</div>';
         html += '<div class="sit-tl-regions">';
         // Sort regions by count desc, show coloured dots
@@ -2350,19 +2443,30 @@ def build_chart(chart_df: pd.DataFrame,
       }});
       var groupsX = groups.map(function(g) {{ return _Thm_isHe ? (REGION_HE[g] || g) : g; }});
 
+      // Cross-region overlap note
+      var hourEvents = rows.reduce(function(s, r) {{ return s + (+r.count || 0); }}, 0);
+      var hourIncidents = incidentData
+        .filter(function(r) {{ return r.date_str === dateStr && r.hour === hour; }})
+        .reduce(function(s, r) {{ return s + (+r.count || 0); }}, 0);
+      var multiRegion = hourEvents - hourIncidents;
+      var incLabel = hourIncidents === 1 ? 'incident' : 'incidents';
+      var overlapNote = multiRegion > 0
+        ? hourIncidents + ' ' + incLabel + ' \u00b7 ' + hourEvents + ' region events (' + multiRegion + ' cross-region)'
+        : hourIncidents + ' ' + incLabel;
+
       var textColor = isDark ? '#cccccc' : '#333333';
       var plotBg    = isDark ? '#1a1a2e' : 'white';
       var paperBg   = isDark ? '#0f0f1a' : '#fafafa';
       var gridColor = isDark ? '#2a2a3e' : '#e0e0e0';
 
       var traces = [
-        {{ name: _Thm.hover_missile_alert, type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].missile;}}), marker:{{color:'#d62728'}} }},
         {{ name: _Thm.hover_pre_alert,     type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].pre;}}),     marker:{{color:'#ff7f0e'}} }},
+        {{ name: _Thm.hover_missile_alert, type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].missile;}}), marker:{{color:'#d62728'}} }},
         {{ name: _Thm.hover_drone_alert,   type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].drone;}}),   marker:{{color:'#17becf'}} }},
       ];
       var layout = {{
         barmode: 'stack',
-        title: {{ text: ('0'+hour).slice(-2)+':00 \u00b7 '+dateStr+'<br><sup>'+sectionLabel+'</sup>', font:{{color:textColor, size:13}}, x:0.5 }},
+        title: {{ text: ('0'+hour).slice(-2)+':00 \u00b7 '+dateStr+'<br><sup>'+overlapNote+'</sup>', font:{{color:textColor, size:13}}, x:0.5 }},
         xaxis: {{ tickangle: -30, color: textColor, tickfont: {{size: 10}} }},
         yaxis: {{ title: _Thm.yaxis_alert_events, color: textColor, gridcolor: gridColor, zeroline: false }},
         plot_bgcolor: plotBg, paper_bgcolor: paperBg,
@@ -2375,6 +2479,43 @@ def build_chart(chart_df: pd.DataFrame,
       document.getElementById('modal-chart').style.height = '340px';
       document.getElementById('modal-backdrop').classList.add('open');
       Plotly.react('modal-chart', traces, layout, {{responsive: true}});
+    }}
+
+    // ── Incident count helper for a time window ────────────────────────────
+    function periodCounts(w) {{
+      var startDate = (w.start_iso || '').slice(0, 10);
+      var startHour = parseInt((w.start_iso || '00').slice(11, 13)) || 0;
+      var endDate   = (w.end_iso   || '').slice(0, 10);
+      var endHour   = parseInt((w.end_iso   || '00').slice(11, 13)) || 0;
+      function inWindow(ds, h) {{
+        if (ds < startDate || ds > endDate) return false;
+        if (ds === startDate && h < startHour) return false;
+        if (ds === endDate   && h >= endHour)  return false;
+        return true;
+      }}
+      // Sum events per (ds, h, atype) cell for cross-referencing
+      var eventsByCell = {{}};
+      hourlyData.forEach(function(r) {{
+        if (!inWindow(r.date_str, +r.hour)) return;
+        var k = r.date_str + '|' + r.hour + '|' + r.alert_type;
+        eventsByCell[k] = (eventsByCell[k] || 0) + (+r.count || 0);
+      }});
+      var events = Object.keys(eventsByCell).reduce(function(s, k) {{ return s + eventsByCell[k]; }}, 0);
+
+      var incidents = 0, multiRegionEvents = 0, multiRegionIncidents = 0;
+      incidentData.forEach(function(r) {{
+        if (!inWindow(r.date_str, +r.hour)) return;
+        var cnt = +r.count || 0;
+        incidents += cnt;
+        var k = r.date_str + '|' + r.hour + '|' + r.alert_type;
+        var evts = eventsByCell[k] || 0;
+        if (evts > cnt) {{
+          multiRegionEvents     += evts - cnt;  // extra events beyond 1-per-incident
+          multiRegionIncidents  += cnt;          // all incidents in this cell are multi-region context
+        }}
+      }});
+      return {{ events: events, incidents: incidents,
+                multiRegionEvents: multiRegionEvents, multiRegionIncidents: multiRegionIncidents }};
     }}
 
     function buildSituationView() {{
@@ -2396,6 +2537,15 @@ def build_chart(chart_df: pd.DataFrame,
           sublabel += ' (' + nowIL + ' Israel time)';
         }}
         html += '<div class="sit-sublabel">' + sublabel + '</div>';
+
+        var pc = periodCounts(w);
+        if (pc.events > 0) {{
+          var evtStr  = pc.events.toLocaleString();
+          var incStr  = pc.incidents.toLocaleString();
+          var ePart   = pc.multiRegionEvents     > 0 ? evtStr + ' events (' + pc.multiRegionEvents.toLocaleString()     + ' multi-region)' : evtStr + ' events';
+          var iPart   = pc.multiRegionIncidents  > 0 ? incStr + ' incidents (' + pc.multiRegionIncidents.toLocaleString() + ' multi-region)' : incStr + ' incidents';
+          html += '<div class="sit-summary" style="margin-bottom:8px;font-size:12px;">' + ePart + ' \u00b7 ' + iPart + '</div>';
+        }}
 
         html += buildTimelineHTML(w, titles[key]);
         html += '</div>';
@@ -2669,7 +2819,7 @@ def main() -> None:
 
     # 5. Aggregate new rows
     print("\nAggregating alerts by zone …")
-    zone_total, zone_night, new_chart_df = aggregate(df, city_to_zone)
+    zone_total, zone_night, new_chart_df, new_incident_df = aggregate(df, city_to_zone)
     total_alerts = sum(zone_total.values())
     total_night  = sum(zone_night.values())
     print(f"  Deduplicated alert events : {total_alerts:,}")
@@ -2677,7 +2827,8 @@ def main() -> None:
           f"({round(total_night / total_alerts * 100, 1) if total_alerts else 0}%)")
 
     # Merge with historical chart_df from prior build
-    chart_df = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
+    chart_df    = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
+    incident_df = merge_incident_df(existing.get("incident_df", []) if existing else [], new_incident_df)
 
     # 5b. Detect partial day from the merged chart_df
     last_date    = chart_df["date_str"].dropna().max() if not chart_df.empty else None
@@ -2734,9 +2885,10 @@ def main() -> None:
         lookback_dates=lookback_dates,
     )
 
-    # 8. Save processed data (v2 schema, incremental)
+    # 8. Save processed data (incremental)
     save_processed(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
                    partial_day, partial_hour,
+                   incident_df=incident_df,
                    fetched_at=fetched_at, csv_sha=current_sha)
 
     # 9. Save situation.json (small file fetched client-side on every page load)
@@ -2748,7 +2900,8 @@ def main() -> None:
     # 11. Build chart
     build_chart(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
                 partial_day=partial_day, partial_hour=partial_hour,
-                situation_data=situation_data, fetched_at=fetched_at)
+                situation_data=situation_data, fetched_at=fetched_at,
+                incident_df=incident_df)
     print("\nDone.  Open output/index.html in your browser.")
 
 

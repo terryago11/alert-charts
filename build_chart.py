@@ -30,6 +30,7 @@ def main() -> None:
 
     payload          = json.loads(DATA_FILE.read_text(encoding="utf-8"))
     chart_df         = pd.DataFrame(payload["chart_df"])
+    incident_df      = pd.DataFrame(payload.get("incident_df", []))
     mismatch_agg     = payload.get("mismatch_agg", [])
     gap_missile_hist = payload.get("gap_missile_hist", {})
     gap_drone_hist   = payload.get("gap_drone_hist", {})
@@ -48,6 +49,7 @@ def main() -> None:
         partial_hour   = partial_hour,
         situation_data = situation_data,
         fetched_at     = fetched_at,
+        incident_df    = incident_df,
     )
 
 

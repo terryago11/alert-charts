@@ -71,8 +71,8 @@ def main() -> None:
 
     # 5. Aggregate and merge with existing chart_df
     print("\nAggregating alerts by zone …")
-    from main import merge_chart_df
-    zone_total, zone_night, new_chart_df = aggregate(df, city_to_zone)
+    from main import merge_chart_df, merge_incident_df
+    zone_total, zone_night, new_chart_df, new_incident_df = aggregate(df, city_to_zone)
 
     total_alerts = sum(zone_total.values())
     total_night  = sum(zone_night.values())
@@ -80,7 +80,8 @@ def main() -> None:
     print(f"  Of which at night         : {total_night:,}  "
           f"({round(total_night / total_alerts * 100, 1) if total_alerts else 0}%)")
 
-    chart_df = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
+    chart_df    = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
+    incident_df = merge_incident_df(existing.get("incident_df", []) if existing else [], new_incident_df)
 
     # 6. Summary table
     print_summary(zone_total, zone_night)
@@ -108,7 +109,7 @@ def main() -> None:
     # 8. Save processed data
     fetched_at = datetime.now(_tz.utc).isoformat()
     save_processed(chart_df, mismatch_agg, gap_missile_h, gap_drone_h,
-                   partial_day, partial_hour, fetched_at=fetched_at)
+                   partial_day, partial_hour, incident_df=incident_df, fetched_at=fetched_at)
     save_situation_json(chart_df, fetched_at)
     print("\nDone.  Run 'python build_chart.py' to regenerate the HTML.")
 
