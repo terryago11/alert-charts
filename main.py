@@ -1362,6 +1362,12 @@ def build_chart(chart_df: pd.DataFrame,
         leadtime_drone_pairs:   'drone pairs',
         xaxis_leadtime:       'Minutes from Pre-alert to Paired Alert',
         yaxis_prealerts:      'Number of Pre-alerts',
+        btn_pct_view:         '% View',
+        btn_abs_view:         'Abs View',
+        yaxis_pct_events:     '% of Events',
+        yaxis_event_count:    'Event Count',
+        yaxis_mismatch_pct:   'Mismatch %',
+        yaxis_missile_events_axis: 'Missile Alert Events',
       }},
       he: {{
         tab_situation: '\u05d7\u05d3\u05e8 \u05de\u05e6\u05d1',
@@ -1370,14 +1376,14 @@ def build_chart(chart_df: pd.DataFrame,
         tab_mismatch: '\u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d5\u05ea',
         tab_leadtime: '\u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4',
         tab_salvos: '\u05de\u05d8\u05d7\u05d9\u05dd',
-        btn_pre: '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea',
+        btn_pre: '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea',
         btn_missile: '\u05d8\u05d9\u05dc \u05d5\u05e8\u05d7\u05e4\u05df',
         btn_dark: '\U0001F319\u00a0\u05db\u05d4\u05d4',
         btn_light: '\u2600\ufe0f\u00a0\u05d1\u05d4\u05d9\u05e8',
         btn_lang: 'EN',
         lbl_from: '\u05de:',
         lbl_to: '\u05e2\u05d3:',
-        lbl_all_regions: '\u05db\u05dc \u05d4\u05d0\u05d6\u05d5\u05e8\u05d9\u05dd',
+        lbl_all_regions: '\u05d4\u05db\u05dc',
         sit_lastnight_title: '\u05de\u05d4 \u05e7\u05e8\u05d4 \u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4?',
         sit_today_title: '\u05de\u05d4 \u05e7\u05d5\u05e8\u05d4 \u05d4\u05d9\u05d5\u05dd?',
         sit_quiet: '\u05e9\u05e7\u05d8 \u2014 \u05dc\u05d0 \u05e0\u05e8\u05e9\u05de\u05d5 \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05ea\u05e7\u05d5\u05e4\u05d4 \u05d6\u05d5.',
@@ -1385,8 +1391,8 @@ def build_chart(chart_df: pd.DataFrame,
         title_date: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8',
         explainer_hour: '\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd (\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3) \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
         explainer_date: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u05de\u05d0\u05d6 28 \u05e4\u05d1\u05e8\u05d5\u05d0\u05e8 2026 \u00b7 \u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3',
-        explainer_mismatch: '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea <strong>\u05de\u05d5\u05ea\u05d0\u05de\u05ea</strong> = \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05d1\u05ea\u05d5\u05da 15\u2009\u05d3\u05e7 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 \u00b7 \u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05d1\u05dc\u05d1\u05d3 = \u05d0\u05d6\u05d4\u05e8\u05d4 \u05dc\u05dc\u05d0 \u05d8\u05d9\u05dc \u00b7 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3 = \u05d8\u05d9\u05dc \u05dc\u05dc\u05d0 \u05d0\u05d6\u05d4\u05e8\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u00b7 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05dc\u05d0 \u05e0\u05db\u05dc\u05dc\u05d9\u05dd \u00b7 \u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5 = % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9',
-        explainer_leadtime: '\u05d4\u05d9\u05e1\u05d8\u05d5\u05d2\u05e8\u05de\u05d4 \u05e9\u05dc \u05e4\u05e8\u05e9 \u05d4\u05d6\u05de\u05df (\u05e9\u05e0\u05d9\u05d5\u05ea) \u05d1\u05d9\u05df \u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05dc\u05d9\u05e8\u05d9 \u05d4\u05d8\u05d9\u05dc\u05d9\u05dd \u05e9\u05d4\u05d2\u05d9\u05e2 \u05d0\u05d7\u05e8\u05d9\u05d4 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 (15\u2009\u05d3\u05e7 \u05d4\u05e8\u05d0\u05e9\u05d5\u05e0\u05d5\u05ea) \u00b7 \u05e2\u05de\u05d5\u05d3\u05d4 \u05d2\u05d1\u05d5\u05d4\u05d4 \u05d9\u05d5\u05ea\u05e8 = \u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4 \u05e0\u05e4\u05d5\u05e5 \u05d9\u05d5\u05ea\u05e8',
+        explainer_mismatch: '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea <strong>\u05de\u05d5\u05ea\u05d0\u05de\u05ea</strong> = \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05d1\u05ea\u05d5\u05da 15\u2009\u05d3\u05e7 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 \u00b7 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05d1\u05dc\u05d1\u05d3 = \u05d0\u05d6\u05d4\u05e8\u05d4 \u05dc\u05dc\u05d0 \u05d8\u05d9\u05dc \u00b7 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3 = \u05d8\u05d9\u05dc \u05dc\u05dc\u05d0 \u05d0\u05d6\u05d4\u05e8\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u00b7 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05dc\u05d0 \u05e0\u05db\u05dc\u05dc\u05d9\u05dd \u00b7 \u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5 = % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9',
+        explainer_leadtime: '\u05d4\u05d9\u05e1\u05d8\u05d5\u05d2\u05e8\u05de\u05d4 \u05e9\u05dc \u05e4\u05e8\u05e9 \u05d4\u05d6\u05de\u05df (\u05e9\u05e0\u05d9\u05d5\u05ea) \u05d1\u05d9\u05df \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05dc\u05d9\u05e8\u05d9 \u05d4\u05d8\u05d9\u05dc\u05d9\u05dd \u05e9\u05d4\u05d2\u05d9\u05e2 \u05d0\u05d7\u05e8\u05d9\u05d4 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 (15\u2009\u05d3\u05e7 \u05d4\u05e8\u05d0\u05e9\u05d5\u05e0\u05d5\u05ea) \u00b7 \u05e2\u05de\u05d5\u05d3\u05d4 \u05d2\u05d1\u05d5\u05d4\u05d4 \u05d9\u05d5\u05ea\u05e8 = \u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4 \u05e0\u05e4\u05d5\u05e5 \u05d9\u05d5\u05ea\u05e8',
         explainer_situation: '\u05de\u05e6\u05d9\u05d2 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc<strong>\u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4</strong> (22:00\u201306:00) \u05d5\u05dc<strong>\u05d4\u05d9\u05d5\u05dd</strong> (06:00\u2013\u05db\u05e2\u05ea), \u05d1\u05e9\u05e2\u05d5\u05df \u05d9\u05e9\u05e8\u05d0\u05dc. \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9\u05e0\u05d9\u05d5\u05ea \u05e0\u05e1\u05e4\u05e8\u05d5\u05ea \u05db\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3. \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e9\u05d5\u05e8\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8.',
         explainer_salvos: '\u05db\u05dc \u05e7\u05d5 = \u05d9\u05d5\u05dd \u05d0\u05d7\u05d3 \u00b7 \u05e6\u05d9\u05e8 X = \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd \u00b7 \u05e1\u05e4\u05d9\u05e8\u05d5\u05ea \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d5\u05ea (\u05d7\u05dc\u05d5\u05df 90\u2009\u05e9)',
         title_mismatch_base: '\u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d5\u05ea \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
@@ -1394,10 +1400,10 @@ def build_chart(chart_df: pd.DataFrame,
         title_leadtime_base: '\u05d4\u05ea\u05e4\u05dc\u05d2\u05d5\u05ea \u05d6\u05de\u05df \u05d4\u05d0\u05d6\u05d4\u05e8\u05d4 \u05d4\u05de\u05d5\u05e7\u05d3\u05de\u05ea',
         title_salvos_base: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd',
         title_salvos_sub: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e9\u05e2\u05d4 (90\u2009\u05e9 \u05d7\u05dc\u05d5\u05df) \u00b7 \u05e7\u05d5 \u05d0\u05d7\u05d3 \u05dc\u05db\u05dc \u05d9\u05d5\u05dd',
-        lbl_all_regions_title: '\u05db\u05dc \u05d4\u05d0\u05d6\u05d5\u05e8\u05d9\u05dd',
+        lbl_all_regions_title: '\u05d4\u05db\u05dc',
         trace_paired_missile: '\u05de\u05d5\u05ea\u05d0\u05dd (\u05d9\u05e8\u05d9 \u05e8\u05e7\u05d8\u05d5\u05ea)',
         trace_paired_drone:   '\u05de\u05d5\u05ea\u05d0\u05dd (\u05e8\u05d7\u05e4\u05df)',
-        trace_pre_only:       '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05d1\u05dc\u05d1\u05d3',
+        trace_pre_only:       '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05d1\u05dc\u05d1\u05d3',
         trace_missile_only:   '\u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3',
         trace_drone_only:     '\u05e8\u05d7\u05e4\u05df \u05d1\u05dc\u05d1\u05d3',
         trace_7d_pct:         '% \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 7 \u05d9\u05de\u05d9\u05dd',
@@ -1405,7 +1411,7 @@ def build_chart(chart_df: pd.DataFrame,
         hover_alerts:         '\u05d4\u05ea\u05e8\u05d0\u05d5\u05ea',
         hover_min:            '\u05d3\u05e7',
         hover_missile_alert:  '\u05d9\u05e8\u05d9 \u05e8\u05e7\u05d8\u05d5\u05ea \u05d5\u05d8\u05d9\u05dc\u05d9\u05dd',
-        hover_pre_alert:      '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea',
+        hover_pre_alert:      '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea',
         hover_drone_alert:    '\u05d7\u05d3\u05d9\u05e8\u05ea \u05e8\u05d7\u05e4\u05df',
         hover_missile_events: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9',
         popup_daily_dist:     '\u05d4\u05ea\u05e4\u05dc\u05d2\u05d5\u05ea \u05d9\u05d5\u05de\u05d9\u05ea',
@@ -1420,8 +1426,14 @@ def build_chart(chart_df: pd.DataFrame,
         leadtime_bins:        '\u05e8\u05e6\u05d5\u05e2\u05d5\u05ea 30 \u05e9\u05e0\u05d9\u05d5\u05ea',
         leadtime_missile_pairs: '\u05d6\u05d5\u05d2\u05d5\u05ea \u05d8\u05d9\u05dc',
         leadtime_drone_pairs:   '\u05d6\u05d5\u05d2\u05d5\u05ea \u05e8\u05d7\u05e4\u05df',
-        xaxis_leadtime:       '\u05d3\u05e7\u05d5\u05ea \u05de\u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05e2\u05d3 \u05d0\u05d6\u05e2\u05e7\u05ea \u05d8\u05d9\u05dc',
-        yaxis_prealerts:      '\u05de\u05e1\u05e4\u05e8 \u05db\u05d5\u05e0\u05e0\u05d5\u05d9\u05d5\u05ea',
+        xaxis_leadtime:       '\u05d3\u05e7\u05d5\u05ea \u05de\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05e2\u05d3 \u05d0\u05d6\u05e2\u05e7\u05ea \u05d8\u05d9\u05dc',
+        yaxis_prealerts:      '\u05de\u05e1\u05e4\u05e8 \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05de\u05d5\u05e7\u05d3\u05de\u05d5\u05ea',
+        btn_pct_view:         '\u05ea\u05e6\u05d5\u05d2\u05ea %',
+        btn_abs_view:         '\u05ea\u05e6\u05d5\u05d2\u05ea \u05de\u05d5\u05d7\u05dc\u05d8\u05ea',
+        yaxis_pct_events:     '% \u05de\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd',
+        yaxis_event_count:    '\u05e1\u05e4\u05d9\u05e8\u05ea \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd',
+        yaxis_mismatch_pct:   '% \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4',
+        yaxis_missile_events_axis: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd',
       }},
     }};
 
@@ -1851,8 +1863,9 @@ def build_chart(chart_df: pd.DataFrame,
 
     function toggleMismatchMode() {{
       mismatchIsPct = !mismatchIsPct;
-      document.getElementById('mismatch-mode-btn').innerHTML =
-        mismatchIsPct ? 'Abs&nbsp;View' : '%&nbsp;View';
+      var _Tm = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      document.getElementById('mismatch-mode-btn').textContent =
+        mismatchIsPct ? _Tm.btn_abs_view : _Tm.btn_pct_view;
       buildMismatchCharts(mismatchRegion);
     }}
 
@@ -1951,9 +1964,9 @@ def build_chart(chart_df: pd.DataFrame,
         width:  viewW,
         title:{{text: _T.title_mismatch_base + regionLabel + '<br><sup>' + _T.title_mismatch_sub + '</sup>',
                 x:0.5, font:{{size:isMobile()?11:14,color:theme.text}}}},
-        yaxis:{{title:mismatchIsPct?'% of Events':'Event Count',
+        yaxis:{{title:mismatchIsPct?_T.yaxis_pct_events:_T.yaxis_event_count,
                 showgrid:true, gridcolor:theme.grid, zeroline:false, color:theme.text}},
-        yaxis2:{{title:'Mismatch %', overlaying:'y', side:'right',
+        yaxis2:{{title:_T.yaxis_mismatch_pct, overlaying:'y', side:'right',
                  showgrid:false, zeroline:false, color:theme.text, range:[0,100]}},
         plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
         font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
@@ -2174,7 +2187,7 @@ def build_chart(chart_df: pd.DataFrame,
           x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
-          title: 'Hour of Day',
+          title: _S.xaxis_hour,
           tickmode: 'array',
           tickvals: [0,2,4,6,8,10,12,14,16,18,20,22],
           ticktext: ['0h','2h','4h','6h','8h','10h','12h','14h','16h','18h','20h','22h'],
@@ -2183,7 +2196,7 @@ def build_chart(chart_df: pd.DataFrame,
           zeroline: false, color: textColor,
         }},
         yaxis: {{
-          title: 'Missile Alert Events',
+          title: _S.yaxis_missile_events_axis,
           showgrid: true, gridcolor: gridColor,
           zeroline: true, zerolinecolor: gridColor,
           color: textColor,
@@ -2417,7 +2430,7 @@ def build_chart(chart_df: pd.DataFrame,
       document.getElementById('nav-row').style.flexDirection  = isHe ? 'row' : '';
       document.getElementById('nav-tabs').style.flexDirection = isHe ? 'row' : '';
       var _fr = document.getElementById('filter-row');
-      if (_fr) _fr.style.flexDirection = isHe ? 'row-reverse' : '';
+      if (_fr) _fr.style.flexDirection = isHe ? 'row' : '';
 
       // Tab buttons (preserve leading icon)
       var tabIcons = {{ situation: '&#9889;', hour: '&#9200;', date: '&#128197;', mismatch: '&#9888;&#65039;', leadtime: '&#9203;', salvos: '&#128165;' }};
@@ -2456,6 +2469,10 @@ def build_chart(chart_df: pd.DataFrame,
       // Theme and lang buttons
       document.getElementById('theme-btn').textContent = isDark ? T.btn_light : T.btn_dark;
       document.getElementById('lang-btn').textContent  = T.btn_lang;
+
+      // Mismatch mode button (reflects current state)
+      var _mmb = document.getElementById('mismatch-mode-btn');
+      if (_mmb) _mmb.textContent = mismatchIsPct ? T.btn_abs_view : T.btn_pct_view;
 
       // Hamburger label
       var hl = document.getElementById('hamburger-label');
