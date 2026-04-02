@@ -16,20 +16,22 @@ At-a-glance timeline of recent activity, refreshed 4× daily (06:00 / 12:00 / 18
 
 Each section shows a scrollable list of active hours. Every row displays:
 - **Time** (e.g. 05:00)
-- **Alert counts** as emoji badges — 🚀 missile, ⚡ pre-alert, 🛩 drone
+- **Alert event counts** as emoji badges — 🚀 missile, ⚡ pre-alert, 🛩 drone
 - **Coloured dots** for each affected region
 
-Click any row to open a **region breakdown popup** — a stacked bar chart showing how alerts were distributed across regions for that hour.
+Hover a badge to see the exact definition (e.g. *"missile alert events — same zone within 90 s = 1 event"*).
 
-A footer line shows when data was last fetched and when the next automatic update is scheduled (Israel time).
+Click any row to open a **region breakdown popup** — a stacked bar chart showing how alert events were distributed across regions for that hour.
+
+The footer shows when situation data and full chart data were last fetched and when each is next scheduled to refresh (Israel time).
 
 ### By Hour
-Stacked bar chart of alert counts per hour of day (0–23), broken down by region.
+Stacked bar chart of **alert events** per hour of day (0–23), broken down by region.
 A date-range slider lets you focus on any period; alert-type toggles filter by Pre-alert / Missile alert / Drone alert.
 Click any bar to open a day-by-day small-multiples view for that region.
 
 ### By Date
-Cumulative alert counts per region over time.
+Cumulative **alert events** per region over time.
 Range selector buttons (1w / 2w / All) and a drag slider for quick navigation.
 
 ### Mismatches
@@ -48,9 +50,9 @@ Histogram of the gap (in minutes) between a pre-alert and its paired missile ale
 Filter by region to compare warning times across the country.
 
 ### Salvos
-Overlaid line chart — one line per day — showing missile volume by hour of day (0–23).
+Overlaid line chart — one line per day — showing **missile alert events** by hour of day (0–23).
 
-- X axis = hour of day; Y axis = total missiles that hour (flat count, not cumulative)
+- X axis = hour of day; Y axis = missile alert events that hour (flat count, not cumulative)
 - Each day is a separate coloured line, making it easy to compare attack timing patterns across dates
 - Filter by **region** and **date range**
 
@@ -61,6 +63,11 @@ Overlaid line chart — one line per day — showing missile volume by hour of d
 | `Pre-alert` | Early warning — typically 1–3 minutes before expected impact |
 | `Missile alert` | Active siren / rocket alert |
 | `Drone alert` | UAV / unmanned aircraft intrusion |
+
+### Counting methodology
+
+All counts are **deduplicated alert events**, not individual city notifications.
+Alerts fired to the same zone within **90 seconds** of each other are treated as a single event (one missile/drone spreading its alert across nearby cities). This prevents inflating counts when a single threat triggers rapid sequential alerts to multiple neighbouring cities in the same zone.
 
 ## Quick start
 
@@ -77,9 +84,8 @@ open output/index.html
 
 ## Data sources
 
-The dashboard loads alert data from one of:
-1. **GitHub** — fetched automatically from [dleshem/israel-alerts-data](https://github.com/dleshem/israel-alerts-data); no configuration needed
-2. **Local file fallback** — place any `.xlsx`, `.xls`, or `.csv` export in the `data/` folder
+The dashboard loads alert data from:
+- **GitHub** — fetched automatically from [dleshem/israel-alerts-data](https://github.com/dleshem/israel-alerts-data); no configuration needed
 
 City → zone mapping is fetched automatically from
 [pikud-haoref-api](https://github.com/eladnava/pikud-haoref-api).

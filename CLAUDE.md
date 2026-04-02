@@ -49,9 +49,19 @@ city (~1,450 names)  →  zone (33 HFC zones)  →  region group (11 display gro
 - Zone → region group mapping is in `regions.py` (`ZONE_GROUP`)
 - Region group colours are in `regions.py` (`GROUP_COLORS`)
 
-### Deduplication
-`aggregate()` deduplicates per `(zone, datetime-minute)`: if multiple cities in
-the same zone fire at the same minute, that counts as **one event**.
+### Deduplication / event clustering
+`aggregate()` uses **90-second temporal clustering per `(zone, alert_type)`**:
+alerts to the same zone within `EVENT_CLUSTER_WINDOW` (90 s) of each other are
+treated as a single alert event (the "spread" of one missile/drone across nearby
+cities).  The first alert in a cluster is the representative timestamp.
+
+This is a two-phase approach:
+1. Collect all `(zone, alert_type, dt)` tuples from raw rows (with city lookup)
+2. For each `(zone, alert_type)` pair, sort by time and call `cluster_events()`
+   → one representative timestamp per cluster → one chart row per event
+
+All counts throughout the dashboard represent **deduplicated alert events**, not
+individual city-level alerts.
 
 ### Mismatch analysis
 `compute_mismatches()` works at **city level** with a 15-minute pairing window:
@@ -62,9 +72,9 @@ the same zone fire at the same minute, that counts as **one event**.
 
 ### Salvo analysis
 `compute_salvos()` finds clusters of repeated `Missile alert` events to the same zone:
-- A **salvo cluster** = 2+ missile alerts to the same zone where the gap between every consecutive pair ≤ `SALVO_WINDOW` (30 min)
-- Same-minute hits to the same zone are deduplicated before clustering (consistent with `aggregate()`)
-- Output: one row per cluster with `zone`, `group`, `date_str`, `cluster_start` (ISO string), `cluster_size` (missile count)
+- A **salvo cluster** = 2+ missile alert events to the same zone where the gap between every consecutive pair ≤ `SALVO_WINDOW` (30 min)
+- Uses `cluster_events()` (90-second window) before clustering — consistent with `aggregate()`
+- Output: one row per cluster with `zone`, `group`, `date_str`, `cluster_start` (ISO string), `cluster_size` (event count)
 - All four columns (including `cluster_start`) are serialised to JS; the chart groups by `(date_str, hour)` client-side to produce one line per day on a 24-hour X axis
 
 ### Situation Room
@@ -91,17 +101,17 @@ the same zone fire at the same minute, that counts as **one event**.
 | `build_chart.py` | Fast style-only rebuild from `data/processed.json` (no network) |
 | `regions.py` | `ZONE_GROUP`, `GROUP_COLORS`, `NIGHT_START`/`NIGHT_END` constants |
 | `data/cities.json` | City → zone mapping from pikud-haoref-api (not committed) |
-| `data/city_region_mapping.csv` | Pre-computed city → zone → region export |
+| `data/city_region_mapping.csv` | City → zone → region mapping (CSV only; xlsx removed) |
 | `output/index.html` | Generated dashboard (not committed) |
 
 ## Dashboard tabs
 
-1. **Situation Room** *(default)* — per-hour timeline list for last night and today; emoji badges (🚀 missile, ⚡ pre-alert, 🛩 drone) + coloured region dots per row; click any row for a region-breakdown popup bar chart; fetched-at timestamp and next-update countdown at bottom; built by `compute_situation()` + `buildSituationView()` / `buildTimelineHTML()` / `openHourModal()` JS
-2. **By Hour** — stacked bar, X=hour 0–23, Y=alert count; date-range slider + alert-type toggles
-3. **By Date** — cumulative line chart per region; range selector buttons
+1. **Situation Room** *(default)* — per-hour timeline list for last night and today; emoji badges (🚀 missile, ⚡ pre-alert, 🛩 drone) + coloured region dots per row; click any row for a region-breakdown popup bar chart; built by `compute_situation()` + `buildSituationView()` / `buildTimelineHTML()` / `openHourModal()` JS
+2. **By Hour** — stacked bar, X=hour 0–23, Y=alert events; date-range slider + alert-type toggles
+3. **By Date** — cumulative alert events per region over time; range selector buttons
 4. **Mismatches** — stacked bar per day: paired / pre-alert only / missile only; toggle Abs / % view
 5. **Lead Time** — histogram of pre-alert → missile gap (seconds); region filter
-6. **Salvos** — overlaid line chart, one line per day; X=hour 0–23, Y=total missile count per hour (flat, non-cumulative); filters: region, date range
+6. **Salvos** — overlaid line chart, one line per day; X=hour 0–23, Y=missile alert events per hour (flat, non-cumulative); filters: region, date range
 
 ## Conventions
 

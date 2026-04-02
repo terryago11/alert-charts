@@ -36,7 +36,8 @@ CITIES_JSON_URL = (
 GITHUB_CSV_URL      = "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
 GITHUB_CONTENTS_API = "https://api.github.com/repos/dleshem/israel-alerts-data/contents/israel-alerts.csv"
 CUTOFF_DATE         = pd.Timestamp("2026-02-28")
-PROCESSED_SCHEMA_VERSION = 2
+PROCESSED_SCHEMA_VERSION = 3
+EVENT_CLUSTER_WINDOW = 90  # seconds — alerts within this window per zone = 1 event
 SITE_URL = "https://terryago11.github.io/alert-charts"
 
 ALERT_TRANSLATIONS = {
@@ -144,7 +145,9 @@ def fetch_github_csv(since_dt: Optional[pd.Timestamp] = None) -> Optional[pd.Dat
     # Incremental filter: only rows newer than last full-build fetched_at
     if since_dt is not None:
         before = len(raw)
-        raw = raw[raw["_dt"] > since_dt]
+        # _dt is tz-naive (CSV has no timezone); since_dt may be tz-aware (UTC ISO string)
+        _since_naive = since_dt.tz_convert(None) if since_dt.tzinfo is not None else since_dt
+        raw = raw[raw["_dt"] > _since_naive]
         print(f"  Incremental filter (>{since_dt.isoformat()}): {len(raw):,} new rows (of {before:,} total)")
 
     raw = raw.drop(columns=["_dt"])
@@ -241,6 +244,23 @@ def load_alerts(filepath: Path) -> pd.DataFrame:
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
 
+def cluster_events(times: list) -> list:
+    """Temporal clustering: group sorted timestamps into clusters where each new
+    event starts a new cluster only if it is >EVENT_CLUSTER_WINDOW seconds after
+    the current cluster's start.  Returns the representative (first) timestamp
+    of each cluster."""
+    if not times:
+        return []
+    sorted_ts = sorted(times)
+    result = [sorted_ts[0]]
+    cluster_start = sorted_ts[0]
+    for t in sorted_ts[1:]:
+        if (t - cluster_start).total_seconds() > EVENT_CLUSTER_WINDOW:
+            result.append(t)
+            cluster_start = t
+    return result
+
+
 def is_night(hour: Optional[int]) -> bool:
     if hour is None:
         return False
@@ -251,57 +271,52 @@ def aggregate(
     df: pd.DataFrame, city_to_zone: dict
 ) -> Tuple[dict, dict, pd.DataFrame]:
     """
-    Deduplicate: each unique (zone, alertDateTime-minute) pair counts as one
-    alert event.  If the same zone is hit by multiple cities at the exact same
-    minute, that's one event, not N.
+    Deduplicate using 90-second temporal clustering per (zone, alert_type):
+    alerts within EVENT_CLUSTER_WINDOW seconds to the same zone are treated as
+    one alert event (e.g. the same missile spreading across nearby cities).
 
     Returns (zone_total, zone_night, chart_df).
-    chart_df has columns [date_str, hour, count] — deduplicated event counts
-    per (date, hour) cell, suitable for the bubble chart.
+    chart_df has columns [date_str, hour, group, alert_type, count] —
+    deduplicated event counts per (date, hour, group, alert_type) cell.
     """
-    seen: set         = set()
-    zone_total        = defaultdict(int)
-    zone_night        = defaultdict(int)
-    chart_rows: list  = []
-    unmatched: set    = set()
+    # Phase 1: collect raw (zone, alert_type) -> [dt, ...] from all rows
+    raw_events: dict = defaultdict(list)
+    unmatched: set   = set()
 
     for _, row in df.iterrows():
-        raw      = str(row["city_raw"]).strip()
-        dt       = row["dt"]
-        hour     = row["hour"]
-        date_str = row["date_str"]
-
-        cities = [c.strip() for c in re.split(r"[,،;|\n]+", raw) if c.strip()]
-
+        dt = row["dt"]
+        if dt is None or pd.isna(dt):
+            continue
         alert_type = str(row.get("alert_type", "Unknown"))
-
+        cities = [c.strip() for c in re.split(r"[,،;|\n]+", str(row["city_raw"])) if c.strip()]
         for city in cities:
             zone = city_to_zone.get(city)
-            if not zone:
+            if zone:
+                raw_events[(zone, alert_type)].append(dt)
+            else:
                 unmatched.add(city)
-                continue
-
-            if dt is not None and not pd.isna(dt):
-                key = (zone, dt)
-                if key in seen:
-                    continue
-                seen.add(key)
-
-            zone_total[zone] += 1
-            if is_night(hour):
-                zone_night[zone] += 1
-            if date_str and hour is not None:
-                group = ZONE_GROUP.get(zone, "Other")
-                chart_rows.append({
-                    "date_str":   date_str,
-                    "hour":       int(hour),
-                    "group":      group,
-                    "alert_type": alert_type,
-                })
 
     if unmatched:
         print(f"\n  Note: {len(unmatched)} unmatched city names "
               f"(first 15): {sorted(unmatched)[:15]}")
+
+    # Phase 2: cluster per (zone, alert_type) and emit one row per event
+    zone_total = defaultdict(int)
+    zone_night = defaultdict(int)
+    chart_rows: list = []
+
+    for (zone, alert_type), times in raw_events.items():
+        group = ZONE_GROUP.get(zone, "Other")
+        for dt in cluster_events(times):
+            zone_total[zone] += 1
+            if is_night(dt.hour):
+                zone_night[zone] += 1
+            chart_rows.append({
+                "date_str":   dt.strftime("%Y-%m-%d"),
+                "hour":       dt.hour,
+                "group":      group,
+                "alert_type": alert_type,
+            })
 
     if chart_rows:
         chart_df = (
@@ -456,7 +471,7 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     rows = []
     for zone, times in zone_times.items():
         group        = ZONE_GROUP.get(zone, "Other")
-        deduped      = sorted(set(times))   # dedup same-minute hits
+        deduped      = cluster_events(times)  # 90-second event clustering (consistent with aggregate)
 
         # Group by (date, hour) and count
         hour_counts: dict = defaultdict(list)
@@ -732,7 +747,7 @@ def build_chart(chart_df: pd.DataFrame,
             showgrid=False, zeroline=False, color="#cccccc", range=[-0.5, 23.5],
         ),
         yaxis=dict(
-            title="Alert Count", showgrid=True,
+            title="Alert Events", showgrid=True,
             gridcolor="#2a2a3e", zeroline=False, color="#cccccc",
         ),
         plot_bgcolor="#1a1a2e", paper_bgcolor="#0f0f1a",
@@ -778,8 +793,8 @@ def build_chart(chart_df: pd.DataFrame,
     date_fig = go.Figure(date_traces)
     date_fig.update_layout(
         title=dict(
-            text="IDF Homefront Command — Cumulative Alerts by Region<br>"
-                 "<sup>Deduplicated per zone · use date filters above to zoom</sup>",
+            text="IDF Homefront Command — Cumulative Alert Events by Region<br>"
+                 "<sup>Deduplicated per zone (90 s window) · use date filters above to zoom</sup>",
             x=0.5, font=dict(size=15, color="#cccccc"),
         ),
         xaxis=dict(
@@ -788,7 +803,7 @@ def build_chart(chart_df: pd.DataFrame,
             type="date", dtick=86400000, tickformat="%b %d", tickangle=-45,
         ),
         yaxis=dict(
-            title="Cumulative Alerts", showgrid=True,
+            title="Cumulative Alert Events", showgrid=True,
             gridcolor="#2a2a3e", zeroline=False, color="#cccccc",
         ),
         plot_bgcolor="#1a1a2e", paper_bgcolor="#0f0f1a",
@@ -932,7 +947,10 @@ def build_chart(chart_df: pd.DataFrame,
     #sep {{ width: 1px; height: 22px; background: #ccc; margin: 0 4px; flex-shrink:0; }}
     body.dark #sep {{ background: #333; }}
     /* ── Chart area ── */
-    #view-hour, #view-date, #view-mismatch, #view-leadtime, #view-salvos {{ position: absolute; left:0; right:0; }}
+    #view-hour, #view-date, #view-mismatch, #view-leadtime, #view-salvos {{
+      position: absolute; left:0; right:0;
+      display: flex; flex-direction: column;
+    }}
     #view-hour  {{ top: var(--tb-h); bottom: 28px; }}
     #view-date  {{ top: var(--tb-h); bottom: 28px; display: none; }}
     #view-mismatch {{ top: var(--tb-h); bottom: 28px; display: none; }}
@@ -968,10 +986,10 @@ def build_chart(chart_df: pd.DataFrame,
     body.dark .sit-badge-drone   {{ background: #1e1b4b; color: #a5b4fc; }}
     .sit-tl-regions {{ display: flex; gap: 4px; flex-wrap: wrap; flex-shrink: 0; align-items: center; }}
     .sit-tl-dot {{ width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }}
-    #leadtime-chart {{ width:100%; height:100%; }}
-    #salvos-chart {{ width:100%; height:100%; }}
-    #main-chart, #date-full-chart {{ width:100%; height:100%; }}
-    #mismatch-chart-bar {{ width:100%; height:100%; }}
+    #leadtime-chart {{ width:100%; flex:1; min-height:0; }}
+    #salvos-chart {{ width:100%; flex:1; min-height:0; }}
+    #main-chart, #date-full-chart {{ width:100%; flex:1; min-height:0; }}
+    #mismatch-chart-bar {{ width:100%; flex:1; min-height:0; }}
 
     /* ── Global footer ── */
     #global-footer {{
@@ -983,6 +1001,23 @@ def build_chart(chart_df: pd.DataFrame,
     body.dark #global-footer {{
       background: rgba(10,10,28,0.93); color: #666; border-color: #2a2a3e;
     }}
+
+    /* ── Per-tab explainer strip ── */
+    .view-explainer {{
+      flex-shrink: 0; padding: 5px 20px 6px;
+      font-size: 11px; line-height: 1.5; border-top: 1px solid; text-align: center;
+    }}
+    body.light .view-explainer {{ color: #666; border-color: #e0e0e8; background: rgba(245,245,252,0.92); }}
+    body.dark  .view-explainer {{ color: #888; border-color: #2a2a3e; background: rgba(10,10,28,0.92); }}
+    .sit-explainer {{
+      font-size: 11px; color: #888; text-align: center;
+      padding: 12px 0 4px; border-top: 1px solid #e0e0e8; margin-top: 8px; line-height: 1.5;
+    }}
+    body.dark .sit-explainer {{ color: #666; border-color: #2a2a3e; }}
+
+    /* ── RTL (Hebrew) ── */
+    :root[dir=rtl] #nav-tabs {{ flex-direction: row-reverse; }}
+    :root[dir=rtl] #nav-row  {{ flex-direction: row-reverse; }}
 
     /* ── Modal ── */
     #modal-backdrop {{
@@ -1122,6 +1157,7 @@ def build_chart(chart_df: pd.DataFrame,
         <button class="tb-btn"        onclick="setView('salvos')"   id="btn-salvos">&#128165;&nbsp;Salvos</button>
       </div>
       <div id="nav-spacer"></div>
+      <button class="tb-btn" onclick="toggleLang()" id="lang-btn" title="עברית / English">&#127760;&nbsp;EN</button>
       <button class="tb-btn" onclick="toggleTheme()" id="theme-btn">&#127769;&nbsp;Dark</button>
     </div>
 
@@ -1131,32 +1167,32 @@ def build_chart(chart_df: pd.DataFrame,
       <!-- By Hour controls -->
       <div id="hour-controls" style="display:none;align-items:center;gap:6px;">
         <select id="hour-region-select" class="tb-region-select" onchange="onHourRegion(this.value)">
-          <option value="">All regions</option>
+          <option value="" data-i18n="lbl_all_regions">All regions</option>
         </select>
         <div class="tb-sep"></div>
-        <span style="font-size:12px;color:#555;white-space:nowrap;" id="lbl-from">From:</span>
+        <span style="font-size:12px;color:#555;white-space:nowrap;" data-i18n="lbl_from">From:</span>
         <select id="hour-date-from" class="tb-region-select" onchange="onHourDateFrom(this.value)"></select>
-        <span style="font-size:12px;color:#555;">To:</span>
+        <span style="font-size:12px;color:#555;" data-i18n="lbl_to">To:</span>
         <select id="hour-date-to" class="tb-region-select" onchange="onHourDateTo(this.value)"></select>
         <div class="tb-sep"></div>
         <div id="type-btns" style="display:flex;gap:6px;">
-          <button class="tb-btn" id="type-pre" onclick="setTypeMode('pre')">Pre-alert</button>
-          <button class="tb-btn active" id="type-md" onclick="setTypeMode('missile_drone')">Missile &amp; Drone</button>
+          <button class="tb-btn" id="type-pre" onclick="setTypeMode('pre')" data-i18n="btn_pre">Pre-alert</button>
+          <button class="tb-btn active" id="type-md" onclick="setTypeMode('missile_drone')" data-i18n="btn_missile">Missile &amp; Drone</button>
         </div>
       </div>
 
       <!-- By Date controls -->
       <div id="date-controls" style="display:none;align-items:center;gap:6px;">
-        <span style="font-size:12px;color:#555;white-space:nowrap;">From:</span>
+        <span style="font-size:12px;color:#555;white-space:nowrap;" data-i18n="lbl_from">From:</span>
         <select id="date-view-from" class="tb-region-select" onchange="onDateViewFrom(this.value)"></select>
-        <span style="font-size:12px;color:#555;">To:</span>
+        <span style="font-size:12px;color:#555;" data-i18n="lbl_to">To:</span>
         <select id="date-view-to" class="tb-region-select" onchange="onDateViewTo(this.value)"></select>
       </div>
 
       <!-- Mismatch controls -->
       <div id="mismatch-controls" style="display:none;align-items:center;gap:6px;">
         <select id="mismatch-region-select" class="tb-region-select" onchange="onMismatchRegion(this.value)">
-          <option value="">All regions</option>
+          <option value="" data-i18n="lbl_all_regions">All regions</option>
         </select>
         <button class="tb-btn" onclick="toggleMismatchMode()" id="mismatch-mode-btn">%&nbsp;View</button>
       </div>
@@ -1164,19 +1200,19 @@ def build_chart(chart_df: pd.DataFrame,
       <!-- Lead Time controls -->
       <div id="leadtime-controls" style="display:none;align-items:center;gap:6px;">
         <select id="leadtime-region-select" class="tb-region-select" onchange="onLeadtimeRegion(this.value)">
-          <option value="">All regions</option>
+          <option value="" data-i18n="lbl_all_regions">All regions</option>
         </select>
       </div>
 
       <!-- Salvos controls -->
       <div id="salvos-controls" style="display:none;align-items:center;gap:6px;">
         <select id="salvos-region-select" class="tb-region-select" onchange="onSalvosRegion(this.value)">
-          <option value="">All regions</option>
+          <option value="" data-i18n="lbl_all_regions">All regions</option>
         </select>
         <div class="tb-sep"></div>
-        <span style="font-size:12px;color:#555;white-space:nowrap;">From:</span>
+        <span style="font-size:12px;color:#555;white-space:nowrap;" data-i18n="lbl_from">From:</span>
         <select id="salvos-date-from" class="tb-region-select" onchange="onSalvosDateFrom(this.value)"></select>
-        <span style="font-size:12px;color:#555;">To:</span>
+        <span style="font-size:12px;color:#555;" data-i18n="lbl_to">To:</span>
         <select id="salvos-date-to" class="tb-region-select" onchange="onSalvosDateTo(this.value)"></select>
       </div>
 
@@ -1189,28 +1225,33 @@ def build_chart(chart_df: pd.DataFrame,
   </div>
 
   <!-- By-hour view -->
-  <div id="view-hour">
+  <div id="view-hour" style="display:flex;">
     <div id="main-chart"></div>
+    <div class="view-explainer" data-i18n-html="explainer_hour">Stacked by region &middot; deduplicated events (same zone within 90&thinsp;s&nbsp;=&nbsp;1 event) &middot; click a bar to drill down by day</div>
   </div>
 
   <!-- By-date cumulative view -->
   <div id="view-date">
     <div id="date-full-chart"></div>
+    <div class="view-explainer" data-i18n-html="explainer_date">Cumulative deduplicated events per region since 28&nbsp;Feb&nbsp;2026 &middot; same zone within 90&thinsp;s&nbsp;=&nbsp;1 event</div>
   </div>
 
   <!-- Mismatch view -->
   <div id="view-mismatch">
     <div id="mismatch-chart-bar"></div>
+    <div class="view-explainer" data-i18n-html="explainer_mismatch">A Pre-alert is <strong>paired</strong> if a Missile alert follows within 15&thinsp;min for the same city &middot; <strong>Pre-alert only</strong> = warning, no missile &middot; <strong>Missile only</strong> = missile, no prior warning &middot; Drone alerts excluded &middot; dotted line = 7-day rolling mismatch&nbsp;%</div>
   </div>
 
   <!-- Lead-time histogram view -->
   <div id="view-leadtime">
     <div id="leadtime-chart"></div>
+    <div class="view-explainer" data-i18n-html="explainer_leadtime">Histogram of the gap (seconds) between a Pre-alert and the Missile alert that followed it for the same city (within 15&thinsp;min) &middot; taller bar = more common lead time</div>
   </div>
 
   <!-- Salvos view -->
   <div id="view-salvos">
     <div id="salvos-chart"></div>
+    <div class="view-explainer" data-i18n-html="explainer_salvos">Each line = one day &middot; X-axis = hour of day &middot; counts deduplicated (90&thinsp;s window)</div>
   </div>
 
   <!-- Small-multiples modal -->
@@ -1268,6 +1309,71 @@ def build_chart(chart_df: pd.DataFrame,
       leadtime: 'Lead Time', salvos: 'Salvos'
     }};
 
+    // ── i18n translations ────────────────────────────────────────────────────
+    var TRANSLATIONS = {{
+      en: {{
+        tab_situation: 'Situation Room', tab_hour: 'By Hour', tab_date: 'By Date',
+        tab_mismatch: 'Mismatches', tab_leadtime: 'Lead Time', tab_salvos: 'Salvos',
+        btn_pre: 'Pre-alert', btn_missile: 'Missile \u0026 Drone',
+        btn_dark: '\U0001F319\u00a0Dark', btn_light: '\u2600\ufe0f\u00a0Light',
+        btn_lang: '\u05e2\u05d1',
+        lbl_from: 'From:', lbl_to: 'To:', lbl_all_regions: 'All regions',
+        sit_lastnight_title: 'What happened last night?',
+        sit_today_title: 'What\u2019s happening today?',
+        sit_quiet: 'Quiet \u2014 no alerts recorded for this period.',
+        title_hour: 'IDF Homefront Command \u2014 Alert Events by Hour<br><sup>Stacked by region \u00b7 deduplicated (90\u2009s window) \u00b7 click a bar to drill down</sup>',
+        title_date: 'IDF Homefront Command \u2014 Cumulative Alert Events by Region<br><sup>Deduplicated per zone (90\u2009s window) \u00b7 use date filters above to zoom</sup>',
+        explainer_hour: 'Stacked by region \u00b7 deduplicated events (same zone within 90\u2009s\u00a0=\u00a01 event) \u00b7 click a bar to drill down by day',
+        explainer_date: 'Cumulative deduplicated events per region since 28\u00a0Feb\u00a02026 \u00b7 same zone within 90\u2009s\u00a0=\u00a01 event',
+        explainer_mismatch: 'A Pre-alert is <strong>paired</strong> if a Missile alert follows within 15\u2009min for the same city \u00b7 <strong>Pre-alert only</strong> = warning, no missile \u00b7 <strong>Missile only</strong> = missile, no prior warning \u00b7 Drone alerts excluded \u00b7 dotted line = 7-day rolling mismatch\u00a0%',
+        explainer_leadtime: 'Histogram of the gap (seconds) between a Pre-alert and the Missile alert that followed it for the same city (within 15\u2009min) \u00b7 taller bar = more common lead time',
+        explainer_situation: 'Shows deduplicated alert events for <strong>last night</strong> (22:00\u201306:00) and <strong>today</strong> (06:00\u2013now), Israel time. Alerts to the same zone within 90\u2009seconds count as one event. Click any row for a regional breakdown.',
+        explainer_salvos: 'Each line = one day \u00b7 X-axis = hour of day \u00b7 counts deduplicated (90\u2009s window)',
+      }},
+      he: {{
+        tab_situation: '\u05d7\u05d3\u05e8 \u05de\u05e6\u05d1',
+        tab_hour: '\u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4',
+        tab_date: '\u05dc\u05e4\u05d9 \u05ea\u05d0\u05e8\u05d9\u05da',
+        tab_mismatch: '\u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d5\u05ea',
+        tab_leadtime: '\u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4',
+        tab_salvos: '\u05de\u05d8\u05d7\u05d9\u05dd',
+        btn_pre: '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea',
+        btn_missile: '\u05d8\u05d9\u05dc \u05d5\u05e8\u05d7\u05e4\u05df',
+        btn_dark: '\U0001F319\u00a0\u05db\u05d4\u05d4',
+        btn_light: '\u2600\ufe0f\u00a0\u05d1\u05d4\u05d9\u05e8',
+        btn_lang: 'EN',
+        lbl_from: '\u05de:',
+        lbl_to: '\u05e2\u05d3:',
+        lbl_all_regions: '\u05db\u05dc \u05d4\u05d0\u05d6\u05d5\u05e8\u05d9\u05dd',
+        sit_lastnight_title: '\u05de\u05d4 \u05e7\u05e8\u05d4 \u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4?',
+        sit_today_title: '\u05de\u05d4 \u05e7\u05d5\u05e8\u05d4 \u05d4\u05d9\u05d5\u05dd?',
+        sit_quiet: '\u05e9\u05e7\u05d8 \u2014 \u05dc\u05d0 \u05e0\u05e8\u05e9\u05de\u05d5 \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05ea\u05e7\u05d5\u05e4\u05d4 \u05d6\u05d5.',
+        title_hour: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4',
+        title_date: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8',
+        explainer_hour: '\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd (\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3) \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
+        explainer_date: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u05de\u05d0\u05d6 28 \u05e4\u05d1\u05e8\u05d5\u05d0\u05e8 2026 \u00b7 \u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3',
+        explainer_mismatch: '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea <strong>\u05de\u05d5\u05ea\u05d0\u05de\u05ea</strong> = \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05d1\u05ea\u05d5\u05da 15\u2009\u05d3\u05e7 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 \u00b7 \u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05d1\u05dc\u05d1\u05d3 = \u05d0\u05d6\u05d4\u05e8\u05d4 \u05dc\u05dc\u05d0 \u05d8\u05d9\u05dc \u00b7 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3 = \u05d8\u05d9\u05dc \u05dc\u05dc\u05d0 \u05d0\u05d6\u05d4\u05e8\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u00b7 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05dc\u05d0 \u05e0\u05db\u05dc\u05dc\u05d9\u05dd \u00b7 \u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5 = % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9',
+        explainer_leadtime: '\u05d4\u05d9\u05e1\u05d8\u05d5\u05d2\u05e8\u05de\u05d4 \u05e9\u05dc \u05e4\u05e8\u05e9 \u05d4\u05d6\u05de\u05df (\u05e9\u05e0\u05d9\u05d5\u05ea) \u05d1\u05d9\u05df \u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05dc\u05d9\u05e8\u05d9 \u05d4\u05d8\u05d9\u05dc\u05d9\u05dd \u05e9\u05d4\u05d2\u05d9\u05e2 \u05d0\u05d7\u05e8\u05d9\u05d4 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 (15\u2009\u05d3\u05e7 \u05d4\u05e8\u05d0\u05e9\u05d5\u05e0\u05d5\u05ea) \u00b7 \u05e2\u05de\u05d5\u05d3\u05d4 \u05d2\u05d1\u05d5\u05d4\u05d4 \u05d9\u05d5\u05ea\u05e8 = \u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4 \u05e0\u05e4\u05d5\u05e5 \u05d9\u05d5\u05ea\u05e8',
+        explainer_situation: '\u05de\u05e6\u05d9\u05d2 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc<strong>\u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4</strong> (22:00\u201306:00) \u05d5\u05dc<strong>\u05d4\u05d9\u05d5\u05dd</strong> (06:00\u2013\u05db\u05e2\u05ea), \u05d1\u05e9\u05e2\u05d5\u05df \u05d9\u05e9\u05e8\u05d0\u05dc. \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9\u05e0\u05d9\u05d5\u05ea \u05e0\u05e1\u05e4\u05e8\u05d5\u05ea \u05db\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3. \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e9\u05d5\u05e8\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8.',
+        explainer_salvos: '\u05db\u05dc \u05e7\u05d5 = \u05d9\u05d5\u05dd \u05d0\u05d7\u05d3 \u00b7 \u05e6\u05d9\u05e8 X = \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd \u00b7 \u05e1\u05e4\u05d9\u05e8\u05d5\u05ea \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d5\u05ea (\u05d7\u05dc\u05d5\u05df 90\u2009\u05e9)',
+      }},
+    }};
+
+    // Region name map English → Hebrew
+    var REGION_HE = {{
+      'Golan': '\u05d2\u05d5\u05dc\u05df',
+      'Galilee': '\u05d2\u05dc\u05d9\u05dc',
+      'Haifa Area': '\u05d0\u05d6\u05d5\u05e8 \u05d7\u05d9\u05e4\u05d4',
+      'West Bank': '\u05d9\u05d4\u05d5\u05d3\u05d4 \u05d5\u05e9\u05d5\u05de\u05e8\u05d5\u05df',
+      'Tel Aviv / Gush Dan': '\u05ea\u05dc \u05d0\u05d1\u05d9\u05d1 / \u05d2\u05d5\u05e9 \u05d3\u05df',
+      'Sharon / Shephelah': '\u05e9\u05e8\u05d5\u05df / \u05e9\u05e4\u05dc\u05d4',
+      'Jerusalem': '\u05d9\u05e8\u05d5\u05e9\u05dc\u05d9\u05dd',
+      'Gaza Area': '\u05e2\u05d5\u05d8\u05e3 \u05e2\u05d6\u05d4',
+      'Beer Sheva / Negev': '\u05d1\u05d0\u05e8 \u05e9\u05d1\u05e2 / \u05e0\u05d2\u05d1',
+      'Arava': '\u05e2\u05e8\u05d1\u05d4',
+      'Eilat': '\u05d0\u05d9\u05dc\u05ea',
+    }};
+
     function toggleNavDrawer() {{
       document.getElementById('nav-tabs').classList.toggle('open');
       syncTopbarHeight();
@@ -1286,6 +1392,7 @@ def build_chart(chart_df: pd.DataFrame,
 
     // ── State ───────────────────────────────────────────────────────────────
     var isDark            = false;
+    var currentLang       = 'en';
     var currentView       = 'situation';
     var currentDateRange  = null;          // null = all dates
     var activeTypeMode    = 'missile_drone'; // 'pre' | 'missile_drone'
@@ -1313,7 +1420,7 @@ def build_chart(chart_df: pd.DataFrame,
       // Date chart: shorten title (avoid rangeselector overlap), move annotation inside
       dateLayout.margin = {{t: 55, b: 110, l: 45, r: 10}};
       dateLayout.title  = Object.assign({{}}, dateLayout.title, {{
-        text: 'Cumulative Alerts by Region',
+        text: 'Cumulative Alert Events by Region',
         font: {{size: 13, color: '#cccccc'}},
       }});
       // Move partial-day annotation inside plot area (top-right)
@@ -1437,11 +1544,11 @@ def build_chart(chart_df: pd.DataFrame,
     function setView(v) {{
       currentView = v;
       document.getElementById('view-situation').style.display  = v === 'situation' ? 'block' : 'none';
-      document.getElementById('view-hour').style.display       = v === 'hour'      ? 'block' : 'none';
-      document.getElementById('view-date').style.display       = v === 'date'      ? 'block' : 'none';
-      document.getElementById('view-mismatch').style.display   = v === 'mismatch'  ? 'block' : 'none';
-      document.getElementById('view-leadtime').style.display   = v === 'leadtime'  ? 'block' : 'none';
-      document.getElementById('view-salvos').style.display     = v === 'salvos'    ? 'block' : 'none';
+      document.getElementById('view-hour').style.display       = v === 'hour'      ? 'flex'  : 'none';
+      document.getElementById('view-date').style.display       = v === 'date'      ? 'flex'  : 'none';
+      document.getElementById('view-mismatch').style.display   = v === 'mismatch'  ? 'flex'  : 'none';
+      document.getElementById('view-leadtime').style.display   = v === 'leadtime'  ? 'flex'  : 'none';
+      document.getElementById('view-salvos').style.display     = v === 'salvos'    ? 'flex'  : 'none';
       document.getElementById('btn-situation').classList.toggle('active', v === 'situation');
       document.getElementById('btn-hour').classList.toggle('active',      v === 'hour');
       document.getElementById('btn-date').classList.toggle('active',      v === 'date');
@@ -1964,7 +2071,7 @@ def build_chart(chart_df: pd.DataFrame,
           x: hours24, y: ys,
           line:   {{color: color, width: 1.8, shape: 'spline', smoothing: 1.2}},
           marker: {{size: 5, color: color}},
-          hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> missiles<extra></extra>',
+          hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> missile events<extra></extra>',
         }};
       }});
 
@@ -1976,8 +2083,8 @@ def build_chart(chart_df: pd.DataFrame,
       var layout = {{
         height: viewH, width: viewW,
         title: {{
-          text: 'Missile Activity by Hour of Day' + regionNote +
-                '<br><sup>All missiles per hour \u00b7 one line per day</sup>',
+          text: 'Missile Alert Events by Hour of Day' + regionNote +
+                '<br><sup>Deduplicated events per hour (90 s window) \u00b7 one line per day</sup>',
           x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
@@ -1990,7 +2097,7 @@ def build_chart(chart_df: pd.DataFrame,
           zeroline: false, color: textColor,
         }},
         yaxis: {{
-          title: 'Missiles',
+          title: 'Missile Alert Events',
           showgrid: true, gridcolor: gridColor,
           zeroline: true, zerolinecolor: gridColor,
           color: textColor,
@@ -2094,7 +2201,7 @@ def build_chart(chart_df: pd.DataFrame,
           rows.push({{ds: pair.ds, h: pair.h, missile: missile, pre: pre, drone: drone, regions: regions}});
       }});
 
-      if (!rows.length) return '<div class="sit-quiet">Quiet \u2014 no alerts recorded for this period.</div>';
+      if (!rows.length) return '<div class="sit-quiet">' + (TRANSLATIONS[currentLang] || TRANSLATIONS.en).sit_quiet + '</div>';
 
       var html = '<div class="sit-timeline">';
       rows.forEach(function(row) {{
@@ -2102,9 +2209,9 @@ def build_chart(chart_df: pd.DataFrame,
         html += '<div class="sit-tl-row" data-ds="' + row.ds + '" data-h="' + row.h + '" data-sect="' + sectionTitle + '" onclick="openHourModal(this.dataset.ds,+this.dataset.h,this.dataset.sect)">';
         html += '<span class="sit-tl-time">' + timeStr + '</span>';
         html += '<div class="sit-tl-types">';
-        if (row.missile) html += '<span class="sit-badge sit-badge-missile">🚀\u202F' + row.missile + '</span>';
-        if (row.pre)     html += '<span class="sit-badge sit-badge-pre">\u26A1\u202F'           + row.pre     + '</span>';
-        if (row.drone)   html += '<span class="sit-badge sit-badge-drone">🛩\u202F'   + row.drone   + '</span>';
+        if (row.missile) html += '<span class="sit-badge sit-badge-missile" title="missile alert events (same zone within 90s = 1 event)">🚀\u202F' + row.missile + '</span>';
+        if (row.pre)     html += '<span class="sit-badge sit-badge-pre" title="pre-alert events">\u26A1\u202F'           + row.pre     + '</span>';
+        if (row.drone)   html += '<span class="sit-badge sit-badge-drone" title="drone alert events (same zone within 90s = 1 event)">🛩\u202F'   + row.drone   + '</span>';
         html += '</div>';
         html += '<div class="sit-tl-regions">';
         // Sort regions by count desc, show coloured dots
@@ -2145,7 +2252,7 @@ def build_chart(chart_df: pd.DataFrame,
         barmode: 'stack',
         title: {{ text: ('0'+hour).slice(-2)+':00 \u00b7 '+dateStr+'<br><sup>'+sectionLabel+'</sup>', font:{{color:textColor, size:13}}, x:0.5 }},
         xaxis: {{ tickangle: -30, color: textColor, tickfont: {{size: 10}} }},
-        yaxis: {{ title: 'Alerts', color: textColor, gridcolor: gridColor, zeroline: false }},
+        yaxis: {{ title: 'Alert Events', color: textColor, gridcolor: gridColor, zeroline: false }},
         plot_bgcolor: plotBg, paper_bgcolor: paperBg,
         font: {{ family: 'Arial, Helvetica, sans-serif', color: textColor }},
         margin: {{t:65, b:90, l:50, r:20}},
@@ -2161,47 +2268,10 @@ def build_chart(chart_df: pd.DataFrame,
     function buildSituationView() {{
       var el = document.getElementById('situation-content');
       if (!el) return;
-      var titles = {{ last_night: 'What happened last night?', today: 'What\u2019s happening today?' }};
-      // Format fetchedAt timestamp in Israel time
+      var T = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var titles = {{ last_night: T.sit_lastnight_title, today: T.sit_today_title }};
       var ILtz = 'Asia/Jerusalem';
-      var fetchedStr = '';
-      if (fetchedAt) {{
-        try {{
-          var fd = new Date(fetchedAt);
-          fetchedStr = fd.toLocaleDateString('en-GB', {{day:'numeric',month:'short',year:'numeric',timeZone:ILtz}}) +
-                       ' at ' + fd.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
-        }} catch(e) {{ fetchedStr = fetchedAt; }}
-      }}
-      // Compute next update times:
-      //   Situation data — refreshes every 30 min (next :00 or :30 mark)
-      //   Full charts    — rebuilds at 03, 09, 15, 21 UTC
-      var nextUpdateStr = '';
-      try {{
-        var now = new Date();
-        // Next 30-min mark
-        var nextSit     = new Date(Math.ceil(now.getTime() / 1800000) * 1800000);
-        var sitMinsLeft = Math.round((nextSit - now) / 60000);
-        var nextSitIL   = nextSit.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
-        // Next full build
-        var runHours = [3, 9, 15, 21];
-        var nowUTCm  = now.getUTCHours() * 60 + now.getUTCMinutes();
-        var nextH    = runHours.find(function(h) {{ return h * 60 > nowUTCm; }});
-        var nextFull;
-        if (nextH !== undefined) {{
-          nextFull = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH));
-        }} else {{
-          nextFull = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 3));
-        }}
-        var fullDiff  = nextFull - now;
-        var fullH     = Math.floor(fullDiff / 3600000);
-        var fullM     = Math.round((fullDiff % 3600000) / 60000);
-        var fullIL    = nextFull.toLocaleTimeString('en-GB', {{hour:'2-digit',minute:'2-digit',timeZone:ILtz}});
-        nextUpdateStr = 'Situation data: next refresh in ~' + sitMinsLeft + 'm (' + nextSitIL + ' Israel time)'
-          + ' \u00b7 Full charts: ~' + fullH + 'h ' + fullM + 'm (' + fullIL + ' Israel time)';
-      }} catch(e) {{}}
-      var html = fetchedStr
-        ? '<div style="font-size:11px;color:#999;margin-bottom:18px;">Data last fetched: ' + fetchedStr + ' (Israel time)</div>'
-        : '';
+      var html = '';
 
       var windows = computeSituationWindows();
       ['last_night', 'today'].forEach(function(key) {{
@@ -2219,10 +2289,7 @@ def build_chart(chart_df: pd.DataFrame,
         html += '</div>';
       }});
 
-      if (nextUpdateStr) {{
-        html += '<div style="font-size:11px;color:#999;margin-top:8px;padding-top:12px;border-top:1px solid ' +
-                (isDark ? '#2a2a3e' : '#e8e8e8') + ';">' + nextUpdateStr + '</div>';
-      }}
+      html += '<div class="sit-explainer">' + T.explainer_situation + '</div>';
       el.innerHTML = html;
     }}
 
@@ -2231,8 +2298,8 @@ def build_chart(chart_df: pd.DataFrame,
       isDark = !isDark;
       document.body.classList.toggle('dark',  isDark);
       document.body.classList.toggle('light', !isDark);
-      document.getElementById('theme-btn').innerHTML =
-        isDark ? '&#9728;&#65039;&nbsp;Light' : '&#127769;&nbsp;Dark';
+      var T = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      document.getElementById('theme-btn').textContent = isDark ? T.btn_light : T.btn_dark;
       Plotly.relayout('main-chart', isDark ? darkMain : lightMain);
       var dateEl = document.getElementById('date-full-chart');
       if (dateEl && dateEl._fullLayout) {{
@@ -2243,25 +2310,130 @@ def build_chart(chart_df: pd.DataFrame,
       buildLeadTimeChart(leadtimeRegion);
       buildSalvosChart();
     }}
+
+    // ── Language toggle ──────────────────────────────────────────────────────
+    function toggleLang() {{
+      setLang(currentLang === 'en' ? 'he' : 'en');
+    }}
+
+    function setLang(lang) {{
+      currentLang = lang;
+      try {{ localStorage.setItem('lang', lang); }} catch(e) {{}}
+      var T = TRANSLATIONS[lang] || TRANSLATIONS.en;
+      var isHe = lang === 'he';
+      document.documentElement.setAttribute('dir',  isHe ? 'rtl' : 'ltr');
+      document.documentElement.setAttribute('lang', lang);
+
+      // Tab buttons (preserve leading icon)
+      var tabIcons = {{ situation: '&#9889;', hour: '&#9200;', date: '&#128197;', mismatch: '&#9888;&#65039;', leadtime: '&#9203;', salvos: '&#128165;' }};
+      document.getElementById('btn-situation').innerHTML = tabIcons.situation + '&nbsp;' + T.tab_situation;
+      document.getElementById('btn-hour').innerHTML      = tabIcons.hour      + '&nbsp;' + T.tab_hour;
+      document.getElementById('btn-date').innerHTML      = tabIcons.date      + '&nbsp;' + T.tab_date;
+      document.getElementById('btn-mismatch').innerHTML  = tabIcons.mismatch  + '&nbsp;' + T.tab_mismatch;
+      document.getElementById('btn-leadtime').innerHTML  = tabIcons.leadtime  + '&nbsp;' + T.tab_leadtime;
+      document.getElementById('btn-salvos').innerHTML    = tabIcons.salvos    + '&nbsp;' + T.tab_salvos;
+
+      // data-i18n text elements (From:, To:, Pre-alert, Missile & Drone, All regions options)
+      document.querySelectorAll('[data-i18n]').forEach(function(el) {{
+        var key = el.getAttribute('data-i18n');
+        if (T[key] !== undefined) el.textContent = T[key];
+      }});
+
+      // data-i18n-html explainer divs
+      document.querySelectorAll('[data-i18n-html]').forEach(function(el) {{
+        var key = el.getAttribute('data-i18n-html');
+        if (T[key] !== undefined) el.innerHTML = T[key];
+      }});
+
+      // Region selects: translate option labels (keep English values for filter logic)
+      ['hour-region-select','mismatch-region-select','leadtime-region-select','salvos-region-select'].forEach(function(selId) {{
+        var sel = document.getElementById(selId);
+        if (!sel) return;
+        Array.from(sel.options).forEach(function(opt) {{
+          if (opt.value === '') {{
+            opt.textContent = T.lbl_all_regions;
+          }} else {{
+            opt.textContent = isHe ? (REGION_HE[opt.value] || opt.value) : opt.value;
+          }}
+        }});
+      }});
+
+      // Theme and lang buttons
+      document.getElementById('theme-btn').textContent = isDark ? T.btn_light : T.btn_dark;
+      document.getElementById('lang-btn').textContent  = T.btn_lang;
+
+      // Hamburger label
+      var hl = document.getElementById('hamburger-label');
+      if (hl) {{ hl.textContent = T['tab_' + currentView] || VIEW_LABELS[currentView]; }}
+
+      // VIEW_LABELS sync (used by setView for hamburger label on tab switch)
+      VIEW_LABELS.situation = T.tab_situation;
+      VIEW_LABELS.hour      = T.tab_hour;
+      VIEW_LABELS.date      = T.tab_date;
+      VIEW_LABELS.mismatch  = T.tab_mismatch;
+      VIEW_LABELS.leadtime  = T.tab_leadtime;
+      VIEW_LABELS.salvos    = T.tab_salvos;
+
+      // Plotly chart title updates
+      try {{
+        var mainEl = document.getElementById('main-chart');
+        if (mainEl && mainEl.data && mainEl.data.length) {{
+          Plotly.relayout('main-chart', {{'title.text': T.title_hour}});
+        }}
+        var dateEl2 = document.getElementById('date-full-chart');
+        if (dateEl2 && dateEl2.data && dateEl2.data.length) {{
+          Plotly.relayout('date-full-chart', {{'title.text': T.title_date}});
+        }}
+      }} catch(e) {{}}
+
+      // Rebuild dynamic views
+      if (currentView === 'situation') buildSituationView();
+      buildMismatchCharts(mismatchRegion);
+      buildLeadTimeChart(leadtimeRegion);
+      buildSalvosChart();
+    }}
+
+    // Init language from localStorage
+    (function() {{
+      var saved = 'en';
+      try {{ saved = localStorage.getItem('lang') || 'en'; }} catch(e) {{}}
+      if (saved === 'he') setLang('he');
+    }})();
   </script>
   <footer id="global-footer">
-    <span id="global-footer-fetched"></span>
-    &nbsp;&middot;&nbsp;
-    Built by Ira and Natan Skop with some help from Claude Code
+    <span id="global-footer-text"></span>
   </footer>
   <script>
     (function() {{
-      var el = document.getElementById('global-footer-fetched');
+      var el = document.getElementById('global-footer-text');
       if (!el) return;
       var ILtz = 'Asia/Jerusalem';
+      var parts = [];
       try {{
-        var d = new Date(fetchedAt);
-        var dateStr = d.toLocaleDateString('en-GB', {{day:'2-digit', month:'short', year:'numeric', timeZone:ILtz}});
-        var timeStr = d.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
-        el.textContent = 'Main data fetched ' + dateStr + ' at ' + timeStr + ' Israel time';
-      }} catch(e) {{
-        el.textContent = 'Main data fetched ' + fetchedAt;
-      }}
+        var now = new Date();
+        // Situation data
+        var sitSrc = (typeof situFetchedAt !== 'undefined' && situFetchedAt) ? situFetchedAt : fetchedAt;
+        var sitD   = new Date(sitSrc);
+        var sitDate = sitD.toLocaleDateString('en-GB', {{day:'2-digit', month:'long', year:'numeric', timeZone:ILtz}});
+        var sitTime = sitD.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        var nextSit = new Date(Math.ceil(now.getTime() / 1800000) * 1800000);
+        var nextSitIL = nextSit.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        parts.push('Situation data fetched ' + sitDate + ' at ' + sitTime + ' Israel time (next refresh at ' + nextSitIL + ' Israel time)');
+        // Full charts
+        var fullD    = new Date(fetchedAt);
+        var fullDate = fullD.toLocaleDateString('en-GB', {{day:'2-digit', month:'long', year:'numeric', timeZone:ILtz}});
+        var fullTime = fullD.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        var runHours = [3, 9, 15, 21];
+        var nowUTCm  = now.getUTCHours() * 60 + now.getUTCMinutes();
+        var nextH    = runHours.find(function(h) {{ return h * 60 > nowUTCm; }});
+        var nextFull = (nextH !== undefined)
+          ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), nextH))
+          : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 3));
+        var nextFullIL = nextFull.toLocaleTimeString('en-GB', {{hour:'2-digit', minute:'2-digit', timeZone:ILtz}});
+        parts.push('Full charts fetched ' + fullDate + ' at ' + fullTime + ' Israel time (next refresh at ' + nextFullIL + ' Israel time)');
+      }} catch(e) {{}}
+      parts.push('Built by Ira and Natan Skop with some help from Claude Code');
+      el.textContent = parts.join(' \u00b7 ');
     }})();
   </script>
 </body>
