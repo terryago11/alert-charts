@@ -1329,6 +1329,27 @@ def build_chart(chart_df: pd.DataFrame,
         explainer_leadtime: 'Histogram of the gap (seconds) between a Pre-alert and the Missile alert that followed it for the same city (within 15\u2009min) \u00b7 taller bar = more common lead time',
         explainer_situation: 'Shows deduplicated alert events for <strong>last night</strong> (22:00\u201306:00) and <strong>today</strong> (06:00\u2013now), Israel time. Alerts to the same zone within 90\u2009seconds count as one event. Click any row for a regional breakdown.',
         explainer_salvos: 'Each line = one day \u00b7 X-axis = hour of day \u00b7 counts deduplicated (90\u2009s window)',
+        title_mismatch_base: 'Mismatch by Day',
+        title_mismatch_sub: '15-min pairing \u00b7 7-day mismatch\u00a0% (dotted) on right axis',
+        title_leadtime_base: 'Warning Lead Time Distribution',
+        title_salvos_base: 'Missile Alert Events by Hour of Day',
+        title_salvos_sub: 'Deduplicated events per hour (90\u2009s window) \u00b7 one line per day',
+        lbl_all_regions_title: 'All Regions',
+        trace_paired_missile: 'Paired (missile)',
+        trace_paired_drone:   'Paired (drone)',
+        trace_pre_only:       'Pre-alert only',
+        trace_missile_only:   'Missile only',
+        trace_drone_only:     'Drone only',
+        trace_7d_pct:         '7d mismatch %',
+        hover_7d_rate:        '7d mismatch rate:',
+        hover_alerts:         'alerts',
+        hover_min:            'min',
+        hover_missile_alert:  'Missile alert',
+        hover_pre_alert:      'Pre-alert',
+        hover_drone_alert:    'Drone alert',
+        hover_missile_events: 'missile events',
+        popup_daily_dist:     'Daily Alert Distribution',
+        yaxis_alert_events:   'Alert Events',
       }},
       he: {{
         tab_situation: '\u05d7\u05d3\u05e8 \u05de\u05e6\u05d1',
@@ -1356,6 +1377,27 @@ def build_chart(chart_df: pd.DataFrame,
         explainer_leadtime: '\u05d4\u05d9\u05e1\u05d8\u05d5\u05d2\u05e8\u05de\u05d4 \u05e9\u05dc \u05e4\u05e8\u05e9 \u05d4\u05d6\u05de\u05df (\u05e9\u05e0\u05d9\u05d5\u05ea) \u05d1\u05d9\u05df \u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05dc\u05d9\u05e8\u05d9 \u05d4\u05d8\u05d9\u05dc\u05d9\u05dd \u05e9\u05d4\u05d2\u05d9\u05e2 \u05d0\u05d7\u05e8\u05d9\u05d4 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 (15\u2009\u05d3\u05e7 \u05d4\u05e8\u05d0\u05e9\u05d5\u05e0\u05d5\u05ea) \u00b7 \u05e2\u05de\u05d5\u05d3\u05d4 \u05d2\u05d1\u05d5\u05d4\u05d4 \u05d9\u05d5\u05ea\u05e8 = \u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4 \u05e0\u05e4\u05d5\u05e5 \u05d9\u05d5\u05ea\u05e8',
         explainer_situation: '\u05de\u05e6\u05d9\u05d2 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc<strong>\u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4</strong> (22:00\u201306:00) \u05d5\u05dc<strong>\u05d4\u05d9\u05d5\u05dd</strong> (06:00\u2013\u05db\u05e2\u05ea), \u05d1\u05e9\u05e2\u05d5\u05df \u05d9\u05e9\u05e8\u05d0\u05dc. \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9\u05e0\u05d9\u05d5\u05ea \u05e0\u05e1\u05e4\u05e8\u05d5\u05ea \u05db\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3. \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e9\u05d5\u05e8\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8.',
         explainer_salvos: '\u05db\u05dc \u05e7\u05d5 = \u05d9\u05d5\u05dd \u05d0\u05d7\u05d3 \u00b7 \u05e6\u05d9\u05e8 X = \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd \u00b7 \u05e1\u05e4\u05d9\u05e8\u05d5\u05ea \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d5\u05ea (\u05d7\u05dc\u05d5\u05df 90\u2009\u05e9)',
+        title_mismatch_base: '\u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d5\u05ea \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
+        title_mismatch_sub: '\u05d7\u05d9\u05d1\u05d5\u05e8 \u05d1\u05d8\u05d5\u05d5\u05d7 15\u2009\u05d3\u05e7 \u00b7 % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9 (\u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5) \u05d1\u05e6\u05d9\u05e8 \u05d9\u05de\u05e0\u05d9',
+        title_leadtime_base: '\u05d4\u05ea\u05e4\u05dc\u05d2\u05d5\u05ea \u05d6\u05de\u05df \u05d4\u05d0\u05d6\u05d4\u05e8\u05d4 \u05d4\u05de\u05d5\u05e7\u05d3\u05de\u05ea',
+        title_salvos_base: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd',
+        title_salvos_sub: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e9\u05e2\u05d4 (90\u2009\u05e9 \u05d7\u05dc\u05d5\u05df) \u00b7 \u05e7\u05d5 \u05d0\u05d7\u05d3 \u05dc\u05db\u05dc \u05d9\u05d5\u05dd',
+        lbl_all_regions_title: '\u05db\u05dc \u05d4\u05d0\u05d6\u05d5\u05e8\u05d9\u05dd',
+        trace_paired_missile: '\u05de\u05d5\u05ea\u05d0\u05dd (\u05d9\u05e8\u05d9 \u05e8\u05e7\u05d8\u05d5\u05ea)',
+        trace_paired_drone:   '\u05de\u05d5\u05ea\u05d0\u05dd (\u05e8\u05d7\u05e4\u05df)',
+        trace_pre_only:       '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05d1\u05dc\u05d1\u05d3',
+        trace_missile_only:   '\u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3',
+        trace_drone_only:     '\u05e8\u05d7\u05e4\u05df \u05d1\u05dc\u05d1\u05d3',
+        trace_7d_pct:         '% \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 7 \u05d9\u05de\u05d9\u05dd',
+        hover_7d_rate:        '\u05e9\u05d9\u05e2\u05d5\u05e8 \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 7 \u05d9\u05de\u05d9\u05dd:',
+        hover_alerts:         '\u05d4\u05ea\u05e8\u05d0\u05d5\u05ea',
+        hover_min:            '\u05d3\u05e7',
+        hover_missile_alert:  '\u05d9\u05e8\u05d9 \u05e8\u05e7\u05d8\u05d5\u05ea \u05d5\u05d8\u05d9\u05dc\u05d9\u05dd',
+        hover_pre_alert:      '\u05db\u05d5\u05e0\u05e0\u05d5\u05ea',
+        hover_drone_alert:    '\u05d7\u05d3\u05d9\u05e8\u05ea \u05e8\u05d7\u05e4\u05df',
+        hover_missile_events: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9',
+        popup_daily_dist:     '\u05d4\u05ea\u05e4\u05dc\u05d2\u05d5\u05ea \u05d9\u05d5\u05de\u05d9\u05ea',
+        yaxis_alert_events:   '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4',
       }},
     }};
 
@@ -1602,14 +1644,17 @@ def build_chart(chart_df: pd.DataFrame,
         agg[k] = (agg[k] || 0) + r.count;
       }});
 
+      var _T = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var _isHe = currentLang === 'he';
       var newTraces = allGroups.map(function(group) {{
+        var displayName = _isHe ? (REGION_HE[group] || group) : group;
         var ys = Array.from({{length:24}}, function(_, h) {{ return agg[group+'|'+h] || 0; }});
         return {{
           type: 'bar',
           x: Array.from({{length:24}}, function(_, h) {{ return h; }}),
-          y: ys, name: group,
+          y: ys, name: displayName,
           marker: {{ color: groupColors[group] || '#888' }},
-          hovertemplate: '<b>' + group + '</b><br>%{{x:02d}}:00 — <b>%{{y:,}}</b> alerts<extra></extra>',
+          hovertemplate: '<b>' + displayName + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y:,}}</b> ' + _T.hover_alerts + '<extra></extra>',
         }};
       }});
 
@@ -1626,6 +1671,8 @@ def build_chart(chart_df: pd.DataFrame,
 
     // ── Small-multiples modal ───────────────────────────────────────────────
     function openSmallMultiples(group) {{
+      var _Tsm      = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var _Tsm_isHe = currentLang === 'he';
       var rows = hourlyData.filter(function(r) {{
         var dateOk = !currentDateRange ||
           (r.date_str >= currentDateRange[0] && r.date_str <= currentDateRange[1]);
@@ -1671,7 +1718,7 @@ def build_chart(chart_df: pd.DataFrame,
           type: 'bar', x: hours, y: counts,
           xaxis: xTrace, yaxis: yTrace,
           marker: {{ color: colors }},
-          hovertemplate: '%{{x}}:00 — %{{y}} alerts<extra>' + day + '</extra>',
+          hovertemplate: '%{{x}}:00 \u2014 %{{y}} ' + (_Tsm.hover_alerts) + '<extra>' + day + '</extra>',
           showlegend: false,
         }});
 
@@ -1685,7 +1732,7 @@ def build_chart(chart_df: pd.DataFrame,
         layout[yKey] = Object.assign({{}}, ax, {{title:''}});
       }});
 
-      document.getElementById('modal-title').textContent = group + ' — Daily Alert Distribution';
+      document.getElementById('modal-title').textContent = (_Tsm_isHe ? (REGION_HE[group]||group) : group) + ' \u2014 ' + _Tsm.popup_daily_dist;
       document.getElementById('modal-backdrop').classList.add('open');
       Plotly.newPlot('modal-chart', traces, layout, {{responsive:true}});
     }}
@@ -1839,6 +1886,15 @@ def build_chart(chart_df: pd.DataFrame,
         return wTot > 0 ? parseFloat((wMis / wTot * 100).toFixed(1)) : null;
       }});
 
+      var _T = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var _isHe = currentLang === 'he';
+      var evtLabels = {{
+        paired_missile: _T.trace_paired_missile,
+        paired_drone:   _T.trace_paired_drone,
+        pre_only:       _T.trace_pre_only,
+        missile_only:   _T.trace_missile_only,
+        drone_only:     _T.trace_drone_only,
+      }};
       // Bar traces
       var barTraces = EVT_ORDER.map(function(et) {{
         var ys = mismatchIsPct
@@ -1848,27 +1904,28 @@ def build_chart(chart_df: pd.DataFrame,
             }})
           : daily[et];
         return {{
-          type:'bar', x:dates, y:ys, name:EVT_LABELS[et],
+          type:'bar', x:dates, y:ys, name:evtLabels[et],
           marker:{{color:EVT_COLORS[et]}},
           hovertemplate: mismatchIsPct
-            ? '<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: <b>%{{y:.1f}}</b>%<extra></extra>'
-            : '<b>'+EVT_LABELS[et]+'</b><br>%{{x}}: <b>%{{y:,}}</b><extra></extra>',
+            ? '<b>'+evtLabels[et]+'</b><br>%{{x}}: <b>%{{y:.1f}}</b>%<extra></extra>'
+            : '<b>'+evtLabels[et]+'</b><br>%{{x}}: <b>%{{y:,}}</b><extra></extra>',
         }};
       }});
       if (mismatchIsPct) {{
         barTraces.push({{
-          type:'scatter', x:dates, y:rollRate, name:'7d mismatch %', yaxis:'y2',
+          type:'scatter', x:dates, y:rollRate, name:_T.trace_7d_pct, yaxis:'y2',
           line:{{color:theme.roll, width:2, dash:'dot'}}, mode:'lines',
-          hovertemplate:'7d mismatch rate: <b>%{{y:.1f}}%</b><extra></extra>',
+          hovertemplate:_T.hover_7d_rate + ' <b>%{{y:.1f}}%</b><extra></extra>',
         }});
       }}
 
-      var regionLabel = region ? ' — ' + region : ' — All Regions';
+      var regionDisplay = region ? (_isHe ? (REGION_HE[region] || region) : region) : _T.lbl_all_regions_title;
+      var regionLabel = ' \u2014 ' + regionDisplay;
       var barLayout = {{
         barmode:'stack',
         height: viewH,
         width:  viewW,
-        title:{{text:'Mismatch by Day'+regionLabel+'<br><sup>15-min pairing · 7-day mismatch % (dotted) on right axis</sup>',
+        title:{{text: _T.title_mismatch_base + regionLabel + '<br><sup>' + _T.title_mismatch_sub + '</sup>',
                 x:0.5, font:{{size:isMobile()?11:14,color:theme.text}}}},
         yaxis:{{title:mismatchIsPct?'% of Events':'Event Count',
                 showgrid:true, gridcolor:theme.grid, zeroline:false, color:theme.text}},
@@ -1906,6 +1963,8 @@ def build_chart(chart_df: pd.DataFrame,
 
     // ── Lead-time histogram ──────────────────────────────────────────────────
     function buildLeadTimeChart(region) {{
+      var _T    = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var _isHe = currentLang === 'he';
       var theme = isDark
         ? {{bg:'#1a1a2e', paper:'#0f0f1a', grid:'#2a2a3e', text:'#cccccc', legendBg:'rgba(26,26,46,0.85)',    legendBorder:'#444'}}
         : {{bg:'white',   paper:'#fafafa', grid:'#e0e0e0', text:'#333333', legendBg:'rgba(255,255,255,0.85)', legendBorder:'#ccc'}};
@@ -1954,11 +2013,11 @@ def build_chart(chart_df: pd.DataFrame,
           x: mb.x,
           y: mb.y,
           customdata: mb.customdata,
-          name: 'Paired (missile)',
+          name: _T.trace_paired_missile,
           width: BIN_SIZE,
           offset: 0,
           marker: {{color: '#2ca02c', opacity: 0.75}},
-          hovertemplate: '<b>Paired (missile)</b><br>%{{x:.1f}}–%{{customdata:.1f}} min: <b>%{{y:,}}</b><extra></extra>',
+          hovertemplate: '<b>' + _T.trace_paired_missile + '</b><br>%{{x:.1f}}\u2013%{{customdata:.1f}} ' + _T.hover_min + ': <b>%{{y:,}}</b><extra></extra>',
         }});
       }}
       if (droneMin.length) {{
@@ -1968,11 +2027,11 @@ def build_chart(chart_df: pd.DataFrame,
           x: db.x,
           y: db.y,
           customdata: db.customdata,
-          name: 'Paired (drone)',
+          name: _T.trace_paired_drone,
           width: BIN_SIZE,
           offset: 0,
           marker: {{color: '#17becf', opacity: 0.75}},
-          hovertemplate: '<b>Paired (drone)</b><br>%{{x:.1f}}–%{{customdata:.1f}} min: <b>%{{y:,}}</b><extra></extra>',
+          hovertemplate: '<b>' + _T.trace_paired_drone + '</b><br>%{{x:.1f}}\u2013%{{customdata:.1f}} ' + _T.hover_min + ': <b>%{{y:,}}</b><extra></extra>',
         }});
       }}
       if (!traces.length) {{
@@ -1981,7 +2040,8 @@ def build_chart(chart_df: pd.DataFrame,
 
       var nMissile = missileMin.length;
       var nDrone   = droneMin.length;
-      var regionLabel = region ? ' — ' + region : '';
+      var regionDisplay = region ? (_isHe ? (REGION_HE[region] || region) : region) : '';
+      var regionLabel = regionDisplay ? ' \u2014 ' + regionDisplay : '';
       var subtitle = 'Paired events only · 30-second bins · '
         + nMissile.toLocaleString() + ' missile pairs'
         + (nDrone ? ', ' + nDrone.toLocaleString() + ' drone pairs' : '');
@@ -1995,7 +2055,7 @@ def build_chart(chart_df: pd.DataFrame,
         height: viewH,
         width:  viewW,
         title: {{
-          text: 'Warning Lead Time Distribution' + regionLabel + '<br><sup>' + subtitle + '</sup>',
+          text: _T.title_leadtime_base + regionLabel + '<br><sup>' + subtitle + '</sup>',
           x: 0.5, font: {{size: isMobile() ? 12 : 15, color: theme.text}},
         }},
         xaxis: Object.assign({{
@@ -2028,6 +2088,8 @@ def build_chart(chart_df: pd.DataFrame,
 
     // ── Salvo activity by hour of day (one line per day) ────────────────────
     function buildSalvosChart() {{
+      var _S      = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var _S_isHe = currentLang === 'he';
       var textColor = isDark ? '#cccccc' : '#333333';
       var gridColor = isDark ? '#2a2a3e' : '#e0e0e0';
       var paperBg   = isDark ? '#0f0f1a' : '#fafafa';
@@ -2071,11 +2133,12 @@ def build_chart(chart_df: pd.DataFrame,
           x: hours24, y: ys,
           line:   {{color: color, width: 1.8, shape: 'spline', smoothing: 1.2}},
           marker: {{size: 5, color: color}},
-          hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> missile events<extra></extra>',
+          hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> ' + (_S.hover_missile_events) + '<extra></extra>',
         }};
       }});
 
-      var regionNote = salvosRegion ? ' \u00b7 ' + salvosRegion : '';
+      var _rDisplay = salvosRegion ? (_S_isHe ? (REGION_HE[salvosRegion] || salvosRegion) : salvosRegion) : '';
+      var regionNote = _rDisplay ? ' \u00b7 ' + _rDisplay : '';
       var viewEl = document.getElementById('view-salvos');
       var viewH  = viewEl.offsetHeight || (window.innerHeight - 74);
       var viewW  = viewEl.offsetWidth  || window.innerWidth;
@@ -2083,8 +2146,7 @@ def build_chart(chart_df: pd.DataFrame,
       var layout = {{
         height: viewH, width: viewW,
         title: {{
-          text: 'Missile Alert Events by Hour of Day' + regionNote +
-                '<br><sup>Deduplicated events per hour (90 s window) \u00b7 one line per day</sup>',
+          text: _S.title_salvos_base + regionNote + '<br><sup>' + _S.title_salvos_sub + '</sup>',
           x: 0.5, font: {{size: isMobile() ? 11 : 14, color: textColor}},
         }},
         xaxis: {{
@@ -2226,6 +2288,8 @@ def build_chart(chart_df: pd.DataFrame,
     }}
 
     function openHourModal(dateStr, hour, sectionLabel) {{
+      var _Thm      = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
+      var _Thm_isHe = currentLang === 'he';
       var rows = hourlyData.filter(function(r) {{ return r.date_str === dateStr && r.hour === hour; }});
       var gd = {{}};
       rows.forEach(function(r) {{
@@ -2237,6 +2301,7 @@ def build_chart(chart_df: pd.DataFrame,
       var groups = Object.keys(gd).sort(function(a, b) {{
         return (gd[b].missile + gd[b].pre + gd[b].drone) - (gd[a].missile + gd[a].pre + gd[a].drone);
       }});
+      var groupsX = groups.map(function(g) {{ return _Thm_isHe ? (REGION_HE[g] || g) : g; }});
 
       var textColor = isDark ? '#cccccc' : '#333333';
       var plotBg    = isDark ? '#1a1a2e' : 'white';
@@ -2244,15 +2309,15 @@ def build_chart(chart_df: pd.DataFrame,
       var gridColor = isDark ? '#2a2a3e' : '#e0e0e0';
 
       var traces = [
-        {{ name:'Missile alert', type:'bar', x:groups, y:groups.map(function(g){{return gd[g].missile;}}), marker:{{color:'#d62728'}} }},
-        {{ name:'Pre-alert',     type:'bar', x:groups, y:groups.map(function(g){{return gd[g].pre;}}),     marker:{{color:'#ff7f0e'}} }},
-        {{ name:'Drone alert',   type:'bar', x:groups, y:groups.map(function(g){{return gd[g].drone;}}),   marker:{{color:'#17becf'}} }},
+        {{ name: _Thm.hover_missile_alert, type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].missile;}}), marker:{{color:'#d62728'}} }},
+        {{ name: _Thm.hover_pre_alert,     type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].pre;}}),     marker:{{color:'#ff7f0e'}} }},
+        {{ name: _Thm.hover_drone_alert,   type:'bar', x:groupsX, y:groups.map(function(g){{return gd[g].drone;}}),   marker:{{color:'#17becf'}} }},
       ];
       var layout = {{
         barmode: 'stack',
         title: {{ text: ('0'+hour).slice(-2)+':00 \u00b7 '+dateStr+'<br><sup>'+sectionLabel+'</sup>', font:{{color:textColor, size:13}}, x:0.5 }},
         xaxis: {{ tickangle: -30, color: textColor, tickfont: {{size: 10}} }},
-        yaxis: {{ title: 'Alert Events', color: textColor, gridcolor: gridColor, zeroline: false }},
+        yaxis: {{ title: _Thm.yaxis_alert_events, color: textColor, gridcolor: gridColor, zeroline: false }},
         plot_bgcolor: plotBg, paper_bgcolor: paperBg,
         font: {{ family: 'Arial, Helvetica, sans-serif', color: textColor }},
         margin: {{t:65, b:90, l:50, r:20}},
@@ -2323,6 +2388,12 @@ def build_chart(chart_df: pd.DataFrame,
       var isHe = lang === 'he';
       document.documentElement.setAttribute('dir',  isHe ? 'rtl' : 'ltr');
       document.documentElement.setAttribute('lang', lang);
+
+      // RTL nav layout (explicit JS override — CSS :root[dir=rtl] may race on first paint)
+      document.getElementById('nav-row').style.flexDirection  = isHe ? 'row-reverse' : '';
+      document.getElementById('nav-tabs').style.flexDirection = isHe ? 'row-reverse' : '';
+      var _fr = document.getElementById('filter-row');
+      if (_fr) _fr.style.flexDirection = isHe ? 'row-reverse' : '';
 
       // Tab buttons (preserve leading icon)
       var tabIcons = {{ situation: '&#9889;', hour: '&#9200;', date: '&#128197;', mismatch: '&#9888;&#65039;', leadtime: '&#9203;', salvos: '&#128165;' }};
