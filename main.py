@@ -35,7 +35,8 @@ CITIES_JSON_URL = (
 
 GITHUB_CSV_URL      = "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
 GITHUB_CONTENTS_API = "https://api.github.com/repos/dleshem/israel-alerts-data/contents/israel-alerts.csv"
-CUTOFF_DATE         = pd.Timestamp("2026-02-28")
+_cutoff_env = __import__("os").environ.get("ALERT_CUTOFF_DATE")
+CUTOFF_DATE = pd.Timestamp(_cutoff_env) if _cutoff_env else pd.Timestamp("2026-02-28")
 PROCESSED_SCHEMA_VERSION = 4
 EVENT_CLUSTER_WINDOW = 90  # seconds — alerts within this window per zone = 1 event
 SITE_URL = "https://terryago11.github.io/alert-charts"
@@ -220,9 +221,10 @@ def _normalise_df(df: pd.DataFrame) -> pd.DataFrame:
         print("  WARNING: No date/time column detected.")
         dts = pd.Series([pd.NaT] * len(df))
 
-    dt_floor  = [ts.floor("min") if pd.notna(ts) else None for ts in dts]
-    hours     = [int(ts.hour)            if pd.notna(ts) else None for ts in dts]
-    date_strs = [ts.strftime("%Y-%m-%d") if pd.notna(ts) else None for ts in dts]
+    _valid     = dts.notna()
+    dt_floor   = dts.dt.floor("min").where(_valid, other=None).tolist()
+    hours      = dts.dt.hour.where(_valid, other=pd.NA).astype(object).where(_valid, other=None).tolist()
+    date_strs  = dts.dt.strftime("%Y-%m-%d").where(_valid, other=None).tolist()
 
     alert_col = _detect_column(df, ["alert_type", "alerttype", "type"])
     alert_types = df[alert_col].astype(str) if alert_col else pd.Series(["Unknown"] * len(df))
@@ -317,13 +319,18 @@ def aggregate(
     # Phase 1: collect raw (zone, alert_type) -> [dt, ...] from all rows
     raw_events: dict = defaultdict(list)
     unmatched: set   = set()
+    skipped_null_dt  = 0
+    unknown_types: set = set()
 
-    for _, row in df.iterrows():
-        dt = row["dt"]
+    for row in df.itertuples(index=False):
+        dt = row.dt
         if dt is None or pd.isna(dt):
+            skipped_null_dt += 1
             continue
-        alert_type = str(row.get("alert_type", "Unknown"))
-        cities = [c.strip() for c in re.split(r"[,،;|\n]+", str(row["city_raw"])) if c.strip()]
+        alert_type = str(getattr(row, "alert_type", "Unknown") or "Unknown")
+        if alert_type not in ("Pre-alert", "Missile alert", "Drone alert", "Unknown"):
+            unknown_types.add(alert_type)
+        cities = [c.strip() for c in re.split(r"[,،;|\n]+", str(row.city_raw)) if c.strip()]
         for city in cities:
             zone = city_to_zone.get(city)
             if zone:
@@ -331,6 +338,10 @@ def aggregate(
             else:
                 unmatched.add(city)
 
+    if skipped_null_dt:
+        print(f"  Warning: dropped {skipped_null_dt:,} row(s) with missing timestamp.")
+    if unknown_types:
+        print(f"  Warning: unrecognised alert type(s) encountered: {sorted(unknown_types)}")
     if unmatched:
         print(f"\n  Note: {len(unmatched)} unmatched city names "
               f"(first 15): {sorted(unmatched)[:15]}")
@@ -390,17 +401,21 @@ def compute_mismatches(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     """
     # Build per-city alert lists
     city_events: dict = defaultdict(list)
-    for _, row in df.iterrows():
-        raw        = str(row["city_raw"]).strip()
-        dt         = row["dt"]
-        alert_type = str(row.get("alert_type", "Unknown"))
+    _skipped = 0
+    for row in df.itertuples(index=False):
+        raw        = str(row.city_raw).strip()
+        dt         = row.dt
+        alert_type = str(getattr(row, "alert_type", "Unknown") or "Unknown")
         if dt is None or pd.isna(dt):
+            _skipped += 1
             continue
         if alert_type not in ("Pre-alert", "Missile alert", "Drone alert"):
             continue
         cities = [c.strip() for c in re.split(r"[,،;|\n]+", raw) if c.strip()]
         for city in cities:
             city_events[city].append((dt, alert_type))
+    if _skipped:
+        print(f"  compute_mismatches: dropped {_skipped:,} row(s) with missing timestamp.")
 
     rows = []
     for city, events in city_events.items():
@@ -497,13 +512,13 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     zone-date-hour and cluster_size is the missile count.
     """
     zone_times: dict = defaultdict(list)
-    for _, row in df.iterrows():
-        if str(row.get("alert_type", "")) != "Missile alert":
+    for row in df.itertuples(index=False):
+        if str(getattr(row, "alert_type", "") or "") != "Missile alert":
             continue
-        dt = row["dt"]
+        dt = row.dt
         if dt is None or pd.isna(dt):
             continue
-        raw    = str(row["city_raw"]).strip()
+        raw    = str(row.city_raw).strip()
         cities = [c.strip() for c in re.split(r"[,،;|\n]+", raw) if c.strip()]
         for city in cities:
             zone = city_to_zone.get(city)
@@ -539,23 +554,18 @@ def compute_salvos(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
 
 def build_gap_hist(mismatch_df: pd.DataFrame, event_type: str) -> dict:
     """Convert paired mismatch rows → {group: {gap_seconds_str: count}} histogram."""
-    import math
-    hist: dict = {}
     if mismatch_df is None or mismatch_df.empty:
-        return hist
+        return {}
     paired = mismatch_df[
         (mismatch_df["event_type"] == event_type) & mismatch_df["gap_seconds"].notna()
-    ]
-    for _, row in paired.iterrows():
-        gs = row["gap_seconds"]
-        if isinstance(gs, float) and math.isnan(gs):
-            continue
-        g   = row["group"]
-        key = str(int(gs))
-        if g not in hist:
-            hist[g] = {}
-        hist[g][key] = hist[g].get(key, 0) + 1
-    return hist
+    ].copy()
+    if paired.empty:
+        return {}
+    paired["_key"] = paired["gap_seconds"].astype(int).astype(str)
+    return {
+        g: sub["_key"].value_counts().to_dict()
+        for g, sub in paired.groupby("group")
+    }
 
 
 def merge_chart_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame:
@@ -643,27 +653,27 @@ def compute_situation(chart_df: pd.DataFrame) -> dict:
     td_end   = datetime(today.year, today.month, today.day, now.hour, now.minute)
 
     def period_stats(start_dt: datetime, end_dt: datetime, label: str) -> dict:
-        def row_in_range(row) -> bool:
-            ds = row.get("date_str")
-            h  = row.get("hour")
-            if not ds or h is None:
-                return False
-            try:
-                dt = datetime(int(ds[:4]), int(ds[5:7]), int(ds[8:10]), int(h))
-            except (ValueError, TypeError):
-                return False
-            return start_dt <= dt < end_dt
-
-        sub = chart_df[chart_df.apply(row_in_range, axis=1)]
+        if chart_df.empty:
+            sub = chart_df
+        else:
+            _valid_rows = chart_df["date_str"].notna() & chart_df["hour"].notna()
+            _dts = pd.to_datetime(
+                chart_df.loc[_valid_rows, "date_str"]
+            ) + pd.to_timedelta(chart_df.loc[_valid_rows, "hour"].astype(int), unit="h")
+            _mask = pd.Series(False, index=chart_df.index)
+            _mask.loc[_valid_rows] = (_dts >= pd.Timestamp(start_dt)) & (_dts < pd.Timestamp(end_dt))
+            sub = chart_df[_mask]
 
         def type_sum(atype: str) -> int:
             return int(sub[sub["alert_type"] == atype]["count"].sum()) if not sub.empty else 0
 
         per_region_hourly: dict = {}
-        for _, row in sub.iterrows():
-            grp  = row.get("group") or "Other"
-            hour = int(row.get("hour", 0))
-            cnt  = int(row.get("count", 0))
+        for row in sub.itertuples(index=False):
+            grp  = getattr(row, "group", None) or "Other"
+            hour = int(getattr(row, "hour", 0) or 0)
+            cnt  = int(getattr(row, "count", 0) or 0)
+            if not (0 <= hour <= 23):
+                continue
             if grp not in per_region_hourly:
                 per_region_hourly[grp] = [0] * 24
             per_region_hourly[grp][hour] += cnt
@@ -994,6 +1004,8 @@ def build_chart(chart_df: pd.DataFrame,
     }}
     .tb-btn:hover  {{ background: #dde; color: #222; }}
     .tb-btn.active {{ background: #4455cc; color: #fff; border-color: #4455cc; }}
+    .tb-btn:focus-visible {{ outline: 2px solid #4455cc; outline-offset: 2px; }}
+    #modal-close:focus-visible {{ outline: 2px solid #4455cc; outline-offset: 2px; }}
     body.dark .tb-btn          {{ background: #252540; color: #bbb; border-color: #555; }}
     body.dark .tb-btn:hover    {{ background: #333360; color: #fff; }}
     body.dark .tb-btn.active   {{ background: #4455cc; color: #fff; border-color: #4455cc; }}
@@ -1217,19 +1229,19 @@ def build_chart(chart_df: pd.DataFrame,
 
     <!-- Row 1: navigation -->
     <div id="nav-row">
-      <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()">&#9776;&nbsp;<span id="hamburger-label">Situation Room</span></button>
-      <div id="nav-tabs">
+      <button id="hamburger-btn" class="tb-btn" onclick="toggleNavDrawer()" aria-label="Open navigation menu" aria-expanded="false" aria-controls="nav-tabs">&#9776;&nbsp;<span id="hamburger-label">Situation Room</span></button>
+      <div id="nav-tabs" role="tablist">
         <div id="sep"></div>
-        <button class="tb-btn active" onclick="setView('situation')" id="btn-situation">&#9889;&nbsp;Situation Room</button>
-        <button class="tb-btn"        onclick="setView('hour')"      id="btn-hour">&#9200;&nbsp;By Hour</button>
-        <button class="tb-btn"        onclick="setView('date')"     id="btn-date">&#128197;&nbsp;By Date</button>
-        <button class="tb-btn"        onclick="setView('mismatch')" id="btn-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
-        <button class="tb-btn"        onclick="setView('leadtime')" id="btn-leadtime">&#9203;&nbsp;Lead Time</button>
-        <button class="tb-btn"        onclick="setView('salvos')"   id="btn-salvos">&#128165;&nbsp;Salvos</button>
+        <button class="tb-btn active" onclick="setView('situation')" id="btn-situation" role="tab" aria-selected="true"  aria-controls="view-situation">&#9889;&nbsp;Situation Room</button>
+        <button class="tb-btn"        onclick="setView('hour')"      id="btn-hour"      role="tab" aria-selected="false" aria-controls="view-hour">&#9200;&nbsp;By Hour</button>
+        <button class="tb-btn"        onclick="setView('date')"      id="btn-date"      role="tab" aria-selected="false" aria-controls="view-date">&#128197;&nbsp;By Date</button>
+        <button class="tb-btn"        onclick="setView('mismatch')"  id="btn-mismatch"  role="tab" aria-selected="false" aria-controls="view-mismatch">&#9888;&#65039;&nbsp;Mismatches</button>
+        <button class="tb-btn"        onclick="setView('leadtime')"  id="btn-leadtime"  role="tab" aria-selected="false" aria-controls="view-leadtime">&#9203;&nbsp;Lead Time</button>
+        <button class="tb-btn"        onclick="setView('salvos')"    id="btn-salvos"    role="tab" aria-selected="false" aria-controls="view-salvos">&#128165;&nbsp;Salvos</button>
       </div>
       <div id="nav-spacer"></div>
-      <button class="tb-btn" onclick="toggleLang()" id="lang-btn" title="עברית / English">&#127760;&nbsp;EN</button>
-      <button class="tb-btn" onclick="toggleTheme()" id="theme-btn">&#127769;&nbsp;Dark</button>
+      <button class="tb-btn" onclick="toggleLang()" id="lang-btn" title="עברית / English" aria-label="Toggle language between English and Hebrew">&#127760;&nbsp;EN</button>
+      <button class="tb-btn" onclick="toggleTheme()" id="theme-btn" aria-label="Toggle dark/light theme">&#127769;&nbsp;Dark</button>
     </div>
 
     <!-- Row 2: view-specific filters -->
@@ -1526,7 +1538,10 @@ def build_chart(chart_df: pd.DataFrame,
     }};
 
     function toggleNavDrawer() {{
-      document.getElementById('nav-tabs').classList.toggle('open');
+      var drawer = document.getElementById('nav-tabs');
+      var btn    = document.getElementById('hamburger-btn');
+      drawer.classList.toggle('open');
+      btn.setAttribute('aria-expanded', drawer.classList.contains('open') ? 'true' : 'false');
       syncTopbarHeight();
     }}
 
@@ -1700,12 +1715,13 @@ def build_chart(chart_df: pd.DataFrame,
       document.getElementById('view-mismatch').style.display   = v === 'mismatch'  ? 'flex'  : 'none';
       document.getElementById('view-leadtime').style.display   = v === 'leadtime'  ? 'flex'  : 'none';
       document.getElementById('view-salvos').style.display     = v === 'salvos'    ? 'flex'  : 'none';
-      document.getElementById('btn-situation').classList.toggle('active', v === 'situation');
-      document.getElementById('btn-hour').classList.toggle('active',      v === 'hour');
-      document.getElementById('btn-date').classList.toggle('active',      v === 'date');
-      document.getElementById('btn-mismatch').classList.toggle('active',  v === 'mismatch');
-      document.getElementById('btn-leadtime').classList.toggle('active',  v === 'leadtime');
-      document.getElementById('btn-salvos').classList.toggle('active',    v === 'salvos');
+      ['situation','hour','date','mismatch','leadtime','salvos'].forEach(function(tab) {{
+        var btn = document.getElementById('btn-' + tab);
+        btn.classList.toggle('active', v === tab);
+        btn.setAttribute('aria-selected', v === tab ? 'true' : 'false');
+      }});
+      var hbBtn = document.getElementById('hamburger-btn');
+      if (hbBtn) {{ hbBtn.setAttribute('aria-expanded', 'false'); }}
       document.getElementById('hour-controls').style.display     = v === 'hour'     ? 'flex'  : 'none';
       document.getElementById('date-controls').style.display     = v === 'date'     ? 'flex'  : 'none';
       document.getElementById('mismatch-controls').style.display = v === 'mismatch' ? 'flex'  : 'none';
@@ -1879,6 +1895,12 @@ def build_chart(chart_df: pd.DataFrame,
       document.getElementById('modal-backdrop').classList.remove('open');
       Plotly.purge('modal-chart');
     }}
+    document.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape' && document.getElementById('modal-backdrop').classList.contains('open')) {{
+        document.getElementById('modal-backdrop').classList.remove('open');
+        Plotly.purge('modal-chart');
+      }}
+    }});
 
     // ── Mismatch chart ───────────────────────────────────────────────────────
     var mismatchIsPct    = false;
@@ -2067,7 +2089,8 @@ def build_chart(chart_df: pd.DataFrame,
         yaxis:{{title:mismatchIsPct?_T.yaxis_pct_events:_T.yaxis_event_count,
                 showgrid:true, gridcolor:theme.grid, zeroline:false, color:theme.text}},
         yaxis2:{{title:_T.yaxis_mismatch_pct, overlaying:'y', side:'right',
-                 showgrid:false, zeroline:false, color:theme.text, range:[0,100]}},
+                 showgrid:false, zeroline:false, color:'#aaa', range:[0,100],
+                 ticksuffix:'%', tickfont:{{size:10}}}},
         plot_bgcolor:theme.bg, paper_bgcolor:theme.paper,
         font:{{family:'Arial, Helvetica, sans-serif', color:theme.text}},
         legend: isMobile()
@@ -2268,7 +2291,7 @@ def build_chart(chart_df: pd.DataFrame,
           type: 'scatter', mode: 'lines+markers',
           name: date.slice(5),
           x: hours24, y: ys,
-          line:   {{color: color, width: 1.8, shape: 'spline', smoothing: 1.2}},
+          line:   {{color: color, width: 1.8, shape: 'linear'}},
           marker: {{size: 5, color: color}},
           hovertemplate: '<b>' + date + '</b><br>%{{x:02d}}:00 \u2014 <b>%{{y}}</b> ' + (_S.hover_missile_events) + '<extra></extra>',
         }};
@@ -2835,7 +2858,12 @@ def main() -> None:
     today_str    = date.today().isoformat()
     is_partial   = last_date == today_str
     partial_day  = last_date if is_partial else None
-    partial_hour = datetime.now().hour if is_partial else None
+    try:
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        _il_now = datetime.now(tz=_ZoneInfo("Asia/Jerusalem"))
+    except ImportError:
+        _il_now = datetime.now(_tz.utc)  # UTC fallback if zoneinfo unavailable
+    partial_hour = _il_now.hour if is_partial else None
     if partial_day:
         print(f"  Partial day detected: {partial_day} — fetched at hour {partial_hour:02d}:xx")
 
