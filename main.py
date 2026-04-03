@@ -896,7 +896,7 @@ def build_chart(chart_df: pd.DataFrame,
         title=dict(
             text="IDF Homefront Command — Alert Activity by Hour of Day<br>"
                  "<sup>Stacked by region · use filters above to narrow by date/region"
-                 " · click a bar to drill down by day</sup>",
+                 " · click a bar to drill down by day · one incident per zone per all-clear signal</sup>",
             x=0.5, font=dict(size=15, color="#cccccc"),
         ),
         xaxis=dict(
@@ -953,7 +953,7 @@ def build_chart(chart_df: pd.DataFrame,
     date_fig.update_layout(
         title=dict(
             text="IDF Homefront Command — Cumulative Alert Events by Region<br>"
-                 "<sup>Deduplicated per zone (90 s window) · use date filters above to zoom</sup>",
+                 "<sup>One incident per zone per all-clear signal · use date filters above to zoom</sup>",
             x=0.5, font=dict(size=15, color="#cccccc"),
         ),
         xaxis=dict(
@@ -1393,31 +1393,31 @@ def build_chart(chart_df: pd.DataFrame,
   <!-- By-hour view -->
   <div id="view-hour" style="display:flex;">
     <div id="main-chart"></div>
-    <div class="view-explainer" data-i18n-html="explainer_hour">Stacked by region &middot; deduplicated events (same zone within 90&thinsp;s&nbsp;=&nbsp;1 event) &middot; click a bar to drill down by day</div>
+    <div class="view-explainer" data-i18n-html="explainer_hour">Stacked by region &middot; one incident per zone per all-clear signal &middot; click a bar to drill down by day</div>
   </div>
 
   <!-- By-date cumulative view -->
   <div id="view-date">
     <div id="date-full-chart"></div>
-    <div class="view-explainer" data-i18n-html="explainer_date">Cumulative deduplicated events per region since 28&nbsp;Feb&nbsp;2026 &middot; same zone within 90&thinsp;s&nbsp;=&nbsp;1 event</div>
+    <div class="view-explainer" data-i18n-html="explainer_date">Cumulative incidents per region since 28&nbsp;Feb&nbsp;2026 &middot; one incident per zone per all-clear signal</div>
   </div>
 
   <!-- Mismatch view -->
   <div id="view-mismatch">
     <div id="mismatch-chart-bar"></div>
-    <div class="view-explainer" data-i18n-html="explainer_mismatch">A Pre-alert is <strong>paired</strong> if a Missile alert follows within 15&thinsp;min for the same city &middot; <strong>Pre-alert only</strong> = warning, no missile &middot; <strong>Missile only</strong> = missile, no prior warning &middot; Drone alerts excluded &middot; dotted line = 7-day rolling mismatch&nbsp;%</div>
+    <div class="view-explainer" data-i18n-html="explainer_mismatch">A Pre-alert is <strong>paired</strong> if a Missile alert occurs in the same incident (bounded by all-clear) &middot; <strong>Pre-alert only</strong> = warning, no missile &middot; <strong>Missile only</strong> = missile, no prior warning &middot; Drone alerts excluded &middot; dotted line = 7-day rolling mismatch&nbsp;%</div>
   </div>
 
   <!-- Lead-time histogram view -->
   <div id="view-leadtime">
     <div id="leadtime-chart"></div>
-    <div class="view-explainer" data-i18n-html="explainer_leadtime">Histogram of the gap (seconds) between a Pre-alert and the Missile alert that followed it for the same city (within 15&thinsp;min) &middot; taller bar = more common lead time</div>
+    <div class="view-explainer" data-i18n-html="explainer_leadtime">Histogram of the gap (seconds) between a Pre-alert and the first Missile alert in the same incident &middot; taller bar = more common lead time</div>
   </div>
 
   <!-- Salvos view -->
   <div id="view-salvos">
     <div id="salvos-chart"></div>
-    <div class="view-explainer" data-i18n-html="explainer_salvos">Each line = one day &middot; X-axis = hour of day &middot; counts deduplicated (90&thinsp;s window)</div>
+    <div class="view-explainer" data-i18n-html="explainer_salvos">Each line = one day &middot; X-axis = hour of day &middot; counts incidents (one per all-clear signal)</div>
   </div>
 
   <!-- Small-multiples modal -->
@@ -1488,19 +1488,19 @@ def build_chart(chart_df: pd.DataFrame,
         sit_lastnight_title: 'What happened last night?',
         sit_today_title: 'What\u2019s happening today?',
         sit_quiet: 'Quiet \u2014 no alerts recorded for this period.',
-        title_hour: 'IDF Homefront Command \u2014 Alert Events by Hour<br><sup>Stacked by region \u00b7 deduplicated (90\u2009s window) \u00b7 click a bar to drill down</sup>',
-        title_date: 'IDF Homefront Command \u2014 Cumulative Alert Events by Region<br><sup>Deduplicated per zone (90\u2009s window) \u00b7 use date filters above to zoom</sup>',
-        explainer_hour: 'Stacked by region \u00b7 deduplicated events (same zone within 90\u2009s\u00a0=\u00a01 event) \u00b7 click a bar to drill down by day',
-        explainer_date: 'Cumulative deduplicated events per region since 28\u00a0Feb\u00a02026 \u00b7 same zone within 90\u2009s\u00a0=\u00a01 event',
-        explainer_mismatch: 'A Pre-alert is <strong>paired</strong> if a Missile alert follows within 15\u2009min for the same city \u00b7 <strong>Pre-alert only</strong> = warning, no missile \u00b7 <strong>Missile only</strong> = missile, no prior warning \u00b7 Drone alerts excluded \u00b7 dotted line = 7-day rolling mismatch\u00a0%',
-        explainer_leadtime: 'Histogram of the gap (seconds) between a Pre-alert and the Missile alert that followed it for the same city (within 15\u2009min) \u00b7 taller bar = more common lead time',
-        explainer_situation: 'Shows deduplicated alert events for <strong>last night</strong> (22:00\u201306:00) and <strong>today</strong> (06:00\u2013now), Israel time. Alerts to the same zone within 90\u2009seconds count as one event. Click any row for a regional breakdown.',
-        explainer_salvos: 'Each line = one day \u00b7 X-axis = hour of day \u00b7 counts deduplicated (90\u2009s window)',
+        title_hour: 'IDF Homefront Command \u2014 Alert Events by Hour<br><sup>Stacked by region \u00b7 one incident per zone per all-clear signal \u00b7 click a bar to drill down</sup>',
+        title_date: 'IDF Homefront Command \u2014 Cumulative Alert Events by Region<br><sup>One incident per zone per all-clear signal \u00b7 use date filters above to zoom</sup>',
+        explainer_hour: 'Stacked by region \u00b7 one incident per zone per all-clear signal \u00b7 click a bar to drill down by day',
+        explainer_date: 'Cumulative incidents per region since 28\u00a0Feb\u00a02026 \u00b7 one incident per zone per all-clear signal',
+        explainer_mismatch: 'A Pre-alert is <strong>paired</strong> if a Missile alert occurs in the same incident (bounded by all-clear) \u00b7 <strong>Pre-alert only</strong> = warning, no missile \u00b7 <strong>Missile only</strong> = missile, no prior warning \u00b7 Drone alerts excluded \u00b7 dotted line = 7-day rolling mismatch\u00a0%',
+        explainer_leadtime: 'Histogram of the gap (seconds) between a Pre-alert and the first Missile alert in the same incident \u00b7 taller bar = more common lead time',
+        explainer_situation: 'Shows alert incidents for <strong>last night</strong> (22:00\u201306:00) and <strong>today</strong> (06:00\u2013now), Israel time. Each incident spans from first alert to all-clear for that zone. Click any row for a regional breakdown.',
+        explainer_salvos: 'Each line = one day \u00b7 X-axis = hour of day \u00b7 counts incidents (one per all-clear signal)',
         title_mismatch_base: 'Mismatch by Day',
-        title_mismatch_sub: '15-min pairing \u00b7 7-day mismatch\u00a0% (dotted) on right axis',
+        title_mismatch_sub: 'Incident-based pairing \u00b7 7-day mismatch\u00a0% (dotted) on right axis',
         title_leadtime_base: 'Warning Lead Time Distribution',
         title_salvos_base: 'Missile Alert Events by Hour of Day',
-        title_salvos_sub: 'Deduplicated events per hour (90\u2009s window) \u00b7 one line per day',
+        title_salvos_sub: 'Incidents per hour (one per all-clear signal) \u00b7 one line per day',
         lbl_all_regions_title: 'All Regions',
         trace_paired_missile: 'Paired (missile)',
         trace_paired_drone:   'Paired (drone)',
@@ -1555,19 +1555,19 @@ def build_chart(chart_df: pd.DataFrame,
         sit_lastnight_title: '\u05de\u05d4 \u05e7\u05e8\u05d4 \u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4?',
         sit_today_title: '\u05de\u05d4 \u05e7\u05d5\u05e8\u05d4 \u05d4\u05d9\u05d5\u05dd?',
         sit_quiet: '\u05e9\u05e7\u05d8 \u2014 \u05dc\u05d0 \u05e0\u05e8\u05e9\u05de\u05d5 \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05ea\u05e7\u05d5\u05e4\u05d4 \u05d6\u05d5.',
-        title_hour: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4<br><sup>\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2 (90\u05e9) \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8</sup>',
-        title_date: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8<br><sup>\u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2 \u05dc\u05d0\u05d6\u05d5\u05e8 (90\u05e9) \u00b7 \u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05e4\u05d9\u05dc\u05d8\u05e8\u05d9 \u05d4\u05ea\u05d0\u05e8\u05d9\u05da \u05dc\u05d6\u05d5\u05dd</sup>',
-        explainer_hour: '\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd (\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3) \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
-        explainer_date: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u05de\u05d0\u05d6 28 \u05e4\u05d1\u05e8\u05d5\u05d0\u05e8 2026 \u00b7 \u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9 = \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3',
-        explainer_mismatch: '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea <strong>\u05de\u05d5\u05ea\u05d0\u05de\u05ea</strong> = \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05d1\u05ea\u05d5\u05da 15\u2009\u05d3\u05e7 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 \u00b7 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05d1\u05dc\u05d1\u05d3 = \u05d0\u05d6\u05d4\u05e8\u05d4 \u05dc\u05dc\u05d0 \u05d8\u05d9\u05dc \u00b7 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3 = \u05d8\u05d9\u05dc \u05dc\u05dc\u05d0 \u05d0\u05d6\u05d4\u05e8\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u00b7 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05dc\u05d0 \u05e0\u05db\u05dc\u05dc\u05d9\u05dd \u00b7 \u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5 = % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9',
-        explainer_leadtime: '\u05d4\u05d9\u05e1\u05d8\u05d5\u05d2\u05e8\u05de\u05d4 \u05e9\u05dc \u05e4\u05e8\u05e9 \u05d4\u05d6\u05de\u05df (\u05e9\u05e0\u05d9\u05d5\u05ea) \u05d1\u05d9\u05df \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05dc\u05d9\u05e8\u05d9 \u05d4\u05d8\u05d9\u05dc\u05d9\u05dd \u05e9\u05d4\u05d2\u05d9\u05e2 \u05d0\u05d7\u05e8\u05d9\u05d4 \u05dc\u05d0\u05d5\u05ea\u05d4 \u05e2\u05d9\u05e8 (15\u2009\u05d3\u05e7 \u05d4\u05e8\u05d0\u05e9\u05d5\u05e0\u05d5\u05ea) \u00b7 \u05e2\u05de\u05d5\u05d3\u05d4 \u05d2\u05d1\u05d5\u05d4\u05d4 \u05d9\u05d5\u05ea\u05e8 = \u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4 \u05e0\u05e4\u05d5\u05e5 \u05d9\u05d5\u05ea\u05e8',
-        explainer_situation: '\u05de\u05e6\u05d9\u05d2 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc<strong>\u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4</strong> (22:00\u201306:00) \u05d5\u05dc<strong>\u05d4\u05d9\u05d5\u05dd</strong> (06:00\u2013\u05db\u05e2\u05ea), \u05d1\u05e9\u05e2\u05d5\u05df \u05d9\u05e9\u05e8\u05d0\u05dc. \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05dc\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d6\u05d5\u05e8 \u05d1\u05ea\u05d5\u05da 90\u2009\u05e9\u05e0\u05d9\u05d5\u05ea \u05e0\u05e1\u05e4\u05e8\u05d5\u05ea \u05db\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3. \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e9\u05d5\u05e8\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8.',
-        explainer_salvos: '\u05db\u05dc \u05e7\u05d5 = \u05d9\u05d5\u05dd \u05d0\u05d7\u05d3 \u00b7 \u05e6\u05d9\u05e8 X = \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd \u00b7 \u05e1\u05e4\u05d9\u05e8\u05d5\u05ea \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d5\u05ea (\u05d7\u05dc\u05d5\u05df 90\u2009\u05e9)',
+        title_hour: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4<br><sup>\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3 \u05dc\u05e4\u05d9 \u05e1\u05d9\u05d5\u05dd \u05d0\u05d9\u05e8\u05d5\u05e2 \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8</sup>',
+        title_date: '\u05e4\u05d9\u05e7\u05d5\u05d3 \u05d4\u05e2\u05d5\u05e8\u05e3 \u2014 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8<br><sup>\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3 \u05dc\u05e4\u05d9 \u05e1\u05d9\u05d5\u05dd \u05d0\u05d9\u05e8\u05d5\u05e2 \u00b7 \u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05e4\u05d9\u05dc\u05d8\u05e8\u05d9 \u05d4\u05ea\u05d0\u05e8\u05d9\u05da \u05dc\u05d6\u05d5\u05dd</sup>',
+        explainer_hour: '\u05de\u05d5\u05e2\u05e8\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3 \u05dc\u05e4\u05d9 \u05e1\u05d9\u05d5\u05dd \u05d0\u05d9\u05e8\u05d5\u05e2 \u00b7 \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e2\u05de\u05d5\u05d3\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
+        explainer_date: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05e6\u05d8\u05d1\u05e8\u05d9\u05dd \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8 \u05de\u05d0\u05d6 28 \u05e4\u05d1\u05e8\u05d5\u05d0\u05e8 2026 \u00b7 \u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3 \u05dc\u05e4\u05d9 \u05e1\u05d9\u05d5\u05dd \u05d0\u05d9\u05e8\u05d5\u05e2',
+        explainer_mismatch: '\u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea <strong>\u05de\u05d5\u05ea\u05d0\u05de\u05ea</strong> = \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05d1\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2 \u00b7 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05d1\u05dc\u05d1\u05d3 = \u05d0\u05d6\u05d4\u05e8\u05d4 \u05dc\u05dc\u05d0 \u05d8\u05d9\u05dc \u00b7 \u05d8\u05d9\u05dc \u05d1\u05dc\u05d1\u05d3 = \u05d8\u05d9\u05dc \u05dc\u05dc\u05d0 \u05d0\u05d6\u05d4\u05e8\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u00b7 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05dc\u05d0 \u05e0\u05db\u05dc\u05dc\u05d9\u05dd \u00b7 \u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5 = % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9',
+        explainer_leadtime: '\u05d4\u05d9\u05e1\u05d8\u05d5\u05d2\u05e8\u05de\u05d4 \u05e9\u05dc \u05e4\u05e8\u05e9 \u05d4\u05d6\u05de\u05df (\u05e9\u05e0\u05d9\u05d5\u05ea) \u05d1\u05d9\u05df \u05d4\u05ea\u05e8\u05d0\u05d4 \u05de\u05d5\u05e7\u05d3\u05de\u05ea \u05dc\u05d9\u05e8\u05d9 \u05d4\u05d8\u05d9\u05dc\u05d9\u05dd \u05d4\u05e8\u05d0\u05e9\u05d5\u05df \u05d1\u05d0\u05d5\u05ea\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2 \u00b7 \u05e2\u05de\u05d5\u05d3\u05d4 \u05d2\u05d1\u05d5\u05d4\u05d4 \u05d9\u05d5\u05ea\u05e8 = \u05d6\u05de\u05df \u05d0\u05d6\u05d4\u05e8\u05d4 \u05e0\u05e4\u05d5\u05e5 \u05d9\u05d5\u05ea\u05e8',
+        explainer_situation: '\u05de\u05e6\u05d9\u05d2 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d4\u05ea\u05e8\u05d0\u05d4 \u05dc<strong>\u05d0\u05de\u05e9 \u05d1\u05dc\u05d9\u05dc\u05d4</strong> (22:00\u201306:00) \u05d5\u05dc<strong>\u05d4\u05d9\u05d5\u05dd</strong> (06:00\u2013\u05db\u05e2\u05ea), \u05d1\u05e9\u05e2\u05d5\u05df \u05d9\u05e9\u05e8\u05d0\u05dc. \u05db\u05dc \u05d0\u05d9\u05e8\u05d5\u05e2 \u05de\u05ea\u05d7\u05d9\u05dc \u05d1\u05d4\u05ea\u05e8\u05d0\u05d4 \u05d4\u05e8\u05d0\u05e9\u05d5\u05e0\u05d4 \u05d5\u05de\u05e1\u05ea\u05d9\u05d9\u05dd \u05d1\u05e1\u05d9\u05d5\u05dd \u05d0\u05d9\u05e8\u05d5\u05e2. \u05dc\u05d7\u05e5 \u05e2\u05dc \u05e9\u05d5\u05e8\u05d4 \u05dc\u05e4\u05d9\u05e8\u05d5\u05d8 \u05dc\u05e4\u05d9 \u05d0\u05d6\u05d5\u05e8.',
+        explainer_salvos: '\u05db\u05dc \u05e7\u05d5 = \u05d9\u05d5\u05dd \u05d0\u05d7\u05d3 \u00b7 \u05e6\u05d9\u05e8 X = \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd \u00b7 \u05e1\u05e4\u05d9\u05e8\u05d5\u05ea \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd (\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3 \u05dc\u05e4\u05d9 \u05e1\u05d9\u05d5\u05dd)',
         title_mismatch_base: '\u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d5\u05ea \u05dc\u05e4\u05d9 \u05d9\u05d5\u05dd',
-        title_mismatch_sub: '\u05d7\u05d9\u05d1\u05d5\u05e8 \u05d1\u05d8\u05d5\u05d5\u05d7 15\u2009\u05d3\u05e7 \u00b7 % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9 (\u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5) \u05d1\u05e6\u05d9\u05e8 \u05d9\u05de\u05e0\u05d9',
+        title_mismatch_sub: '\u05d7\u05d9\u05d1\u05d5\u05e8 \u05dc\u05e4\u05d9 \u05d0\u05d9\u05e8\u05d5\u05e2 \u00b7 % \u05d0\u05d9-\u05d4\u05ea\u05d0\u05de\u05d4 \u05e9\u05d1\u05d5\u05e2\u05d9 (\u05e7\u05d5 \u05de\u05e7\u05d5\u05d5\u05e7\u05d5) \u05d1\u05e6\u05d9\u05e8 \u05d9\u05de\u05e0\u05d9',
         title_leadtime_base: '\u05d4\u05ea\u05e4\u05dc\u05d2\u05d5\u05ea \u05d6\u05de\u05df \u05d4\u05d0\u05d6\u05d4\u05e8\u05d4 \u05d4\u05de\u05d5\u05e7\u05d3\u05de\u05ea',
         title_salvos_base: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9 \u05d9\u05e8\u05d9 \u05d8\u05d9\u05dc\u05d9\u05dd \u05dc\u05e4\u05d9 \u05e9\u05e2\u05d4 \u05d1\u05d9\u05d5\u05dd',
-        title_salvos_sub: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d1\u05d5\u05d6\u05e0\u05d5\u05d2\u05d9\u05dd \u05dc\u05e9\u05e2\u05d4 (90\u2009\u05e9 \u05d7\u05dc\u05d5\u05df) \u00b7 \u05e7\u05d5 \u05d0\u05d7\u05d3 \u05dc\u05db\u05dc \u05d9\u05d5\u05dd',
+        title_salvos_sub: '\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05dc\u05e9\u05e2\u05d4 (\u05d0\u05d9\u05e8\u05d5\u05e2 \u05d0\u05d7\u05d3 \u05dc\u05e4\u05d9 \u05e1\u05d9\u05d5\u05dd) \u00b7 \u05e7\u05d5 \u05d0\u05d7\u05d3 \u05dc\u05db\u05dc \u05d9\u05d5\u05dd',
         lbl_all_regions_title: '\u05d4\u05db\u05dc',
         trace_paired_missile: '\u05de\u05d5\u05ea\u05d0\u05dd (\u05d9\u05e8\u05d9 \u05e8\u05e7\u05d8\u05d5\u05ea)',
         trace_paired_drone:   '\u05de\u05d5\u05ea\u05d0\u05dd (\u05e8\u05d7\u05e4\u05df)',
