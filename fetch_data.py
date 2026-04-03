@@ -17,6 +17,7 @@ from pathlib import Path
 
 from main import (
     ALL_EVENT_TYPES,
+    INCIDENT_LOOKBACK,
     OUTPUT_DIR,
     aggregate,
     build_gap_hist,
@@ -43,25 +44,25 @@ def main() -> None:
     # 2. Load existing state for incremental merge
     existing = load_processed()
 
-    # 3. Alert data — GitHub CSV (incremental if prior state exists)
-    since_dt = None
-    if existing:
-        import pandas as pd
-        since_dt = pd.Timestamp(existing["fetched_at"])
+    # 3. Alert data — GitHub CSV (incremental if prior state exists).
+    # Fetch from (since_dt - INCIDENT_LOOKBACK) so build_incidents() can close
+    # incidents whose alerts landed in a prior run but whose "All clear" arrives now.
+    import pandas as pd
+    since_dt = pd.Timestamp(existing["fetched_at"]) if existing else None
+    incident_since_dt = (since_dt - INCIDENT_LOOKBACK) if since_dt is not None else None
 
-    raw = fetch_github_csv(since_dt=since_dt)
+    raw = fetch_github_csv(since_dt=incident_since_dt)
     if raw is not None:
-        df = _normalise_df(raw)
+        df_extended = _normalise_df(raw)
     else:
         data_file = find_data_file()
         if data_file is None:
             print("\nNo data found. Place an .xlsx/.csv in data/ or check network.")
             sys.exit(1)
-        df = load_alerts(data_file)
+        df_extended = load_alerts(data_file)
 
     # 4. Detect partial day
-    import pandas as pd
-    last_date    = df["date_str"].dropna().max()
+    last_date    = df_extended["date_str"].dropna().max()
     today_str    = date.today().isoformat()
     is_partial   = last_date == today_str
     partial_day  = last_date if is_partial else None
@@ -69,10 +70,11 @@ def main() -> None:
     if partial_day:
         print(f"  Partial day detected: {partial_day} — fetched at hour {partial_hour:02d}:xx")
 
-    # 5. Aggregate and merge with existing chart_df
+    # 5. Aggregate over the full lookback window and merge with existing chart_df.
     print("\nAggregating alerts by zone …")
     from main import merge_chart_df, merge_incident_df
-    zone_total, zone_night, new_chart_df, new_incident_df = aggregate(df, city_to_zone)
+    from datetime import timedelta
+    zone_total, zone_night, new_chart_df, new_incident_df = aggregate(df_extended, city_to_zone)
 
     total_alerts = sum(zone_total.values())
     total_night  = sum(zone_night.values())
@@ -80,15 +82,29 @@ def main() -> None:
     print(f"  Of which at night         : {total_night:,}  "
           f"({round(total_night / total_alerts * 100, 1) if total_alerts else 0}%)")
 
-    chart_df    = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
-    incident_df = merge_incident_df(existing.get("incident_df", []) if existing else [], new_incident_df)
+    # Dates in the lookback window are replaced rather than summed.
+    if since_dt is not None and incident_since_dt is not None:
+        _lb_start = incident_since_dt.date() if hasattr(incident_since_dt, "date") else incident_since_dt.to_pydatetime().date()
+        _lb_end   = since_dt.date() if hasattr(since_dt, "date") else since_dt.to_pydatetime().date()
+        lookback_dates: set = set()
+        _d = _lb_start
+        while _d <= _lb_end:
+            lookback_dates.add(_d.isoformat())
+            _d += timedelta(days=1)
+    else:
+        lookback_dates = None
+
+    chart_df    = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df,
+                                 drop_dates=lookback_dates)
+    incident_df = merge_incident_df(existing.get("incident_df", []) if existing else [], new_incident_df,
+                                    drop_dates=lookback_dates)
 
     # 6. Summary table
     print_summary(zone_total, zone_night)
 
     # 7. Pre-alert / missile mismatch analysis
     print("\nComputing pre-alert / missile mismatches …")
-    new_mismatch_df = compute_mismatches(df, city_to_zone)
+    new_mismatch_df = compute_mismatches(df_extended, city_to_zone)
     if not new_mismatch_df.empty:
         counts = new_mismatch_df["event_type"].value_counts()
         for et in ALL_EVENT_TYPES:
@@ -104,6 +120,7 @@ def main() -> None:
         existing.get("gap_missile_hist", {}) if existing else {},
         existing.get("gap_drone_hist", {}) if existing else {},
         new_mismatch_df,
+        lookback_dates=lookback_dates,
     )
 
     # 8. Save processed data

@@ -37,7 +37,7 @@ GITHUB_CSV_URL      = "https://raw.githubusercontent.com/dleshem/israel-alerts-d
 GITHUB_CONTENTS_API = "https://api.github.com/repos/dleshem/israel-alerts-data/contents/israel-alerts.csv"
 _cutoff_env = __import__("os").environ.get("ALERT_CUTOFF_DATE")
 CUTOFF_DATE = pd.Timestamp(_cutoff_env) if _cutoff_env else pd.Timestamp("2026-02-28")
-PROCESSED_SCHEMA_VERSION = 4
+PROCESSED_SCHEMA_VERSION = 5
 EVENT_CLUSTER_WINDOW = 90  # seconds — alerts within this window per zone = 1 event
 SITE_URL = "https://terryago11.github.io/alert-charts"
 
@@ -45,13 +45,15 @@ ALERT_TRANSLATIONS = {
     "בדקות הקרובות צפויות להתקבל התרעות באזורך": "Pre-alert",
     "חדירת כלי טיס עוין":                         "Drone alert",
     "ירי רקטות וטילים":                            "Missile alert",
+    "האירוע הסתיים":                               "All clear",
+    "ירי רקטות וטילים - האירוע הסתיים":           "All clear",
+    "חדירת כלי טיס עוין - האירוע הסתיים":         "All clear",
 }
 
 DATA_DIR    = Path("data")
 OUTPUT_DIR  = Path("output")
-PAIR_WINDOW       = timedelta(minutes=15)   # max gap between pre-alert and missile alert
 SALVO_WINDOW      = timedelta(minutes=30)   # max consecutive gap within a salvo cluster
-MISMATCH_LOOKBACK = timedelta(minutes=30)   # re-examine window to catch cross-boundary pairs
+INCIDENT_LOOKBACK = timedelta(hours=6)      # re-examine window to close cross-boundary incidents
 
 
 # ── City / Zone helpers ───────────────────────────────────────────────────────
@@ -264,6 +266,57 @@ def cluster_events(times: list) -> list:
     return result
 
 
+def build_incidents(zone_events: list) -> list:
+    """Group sorted (dt, alert_type, city) events for one zone into incidents.
+
+    An incident opens on the first Pre-alert / Missile alert / Drone alert and
+    closes when an "All clear" record is received for any city in that zone.
+    Incidents still open at the end of the list are marked closed=False.
+
+    Each incident dict contains:
+      start_dt    – timestamp of the first alert
+      end_dt      – timestamp of the closing "All clear" (or None if still open)
+      closed      – bool
+      cities      – set of all city names seen in this incident (alerts + all-clear)
+      pre_dts     – list of pre-alert timestamps
+      missile_dts – list of missile alert timestamps
+      drone_dts   – list of drone alert timestamps
+    """
+    incidents: list = []
+    current: Optional[dict] = None
+    for dt, alert_type, city in zone_events:
+        if alert_type == "All clear":
+            if current is not None:
+                current["end_dt"] = dt
+                current["closed"] = True
+                current["cities"].add(city)
+                incidents.append(current)
+                current = None
+            # spurious all-clear with no open incident — skip
+        else:
+            if current is None:
+                current = {
+                    "start_dt":     dt,
+                    "end_dt":       None,
+                    "closed":       False,
+                    "cities":       {city},   # all cities: alerts + all-clear (full drill-down)
+                    "alert_cities": {city},   # only cities that received alert records
+                    "pre_dts":      [],
+                    "missile_dts":  [],
+                    "drone_dts":    [],
+                }
+            else:
+                current["cities"].add(city)
+                current["alert_cities"].add(city)
+            _key = {"Pre-alert": "pre", "Missile alert": "missile", "Drone alert": "drone"}.get(alert_type)
+            if _key:
+                current[f"{_key}_dts"].append(dt)
+    if current is not None:
+        current["closed"] = False
+        incidents.append(current)
+    return incidents
+
+
 def compute_global_incidents(zone_clustered: dict) -> "pd.DataFrame":
     """Cross-zone temporal clustering (same 90 s window).
 
@@ -306,21 +359,22 @@ def aggregate(
     df: pd.DataFrame, city_to_zone: dict
 ) -> Tuple[dict, dict, pd.DataFrame, pd.DataFrame]:
     """
-    Deduplicate using 90-second temporal clustering per (zone, alert_type):
-    alerts within EVENT_CLUSTER_WINDOW seconds to the same zone are treated as
-    one alert event (e.g. the same missile spreading across nearby cities).
+    Signal-based incident detection: incidents are bounded by "All clear" records.
+
+    An incident opens on the first Pre-alert / Missile alert / Drone alert to a
+    zone and closes when an "All clear" record maps to the same zone.  City
+    membership is preserved in each incident for future drill-down.
 
     Returns (zone_total, zone_night, chart_df, incident_df).
     chart_df has columns [date_str, hour, group, alert_type, count] —
-    deduplicated event counts per (date, hour, group, alert_type) cell.
+    one count per alert type present in each incident, keyed to start_dt.
     incident_df has columns [date_str, hour, alert_type, count] —
-    cross-zone deduplicated incident counts (same 90 s window across all zones).
+    cross-zone deduplicated incident counts (90 s window across all zones).
     """
-    # Phase 1: collect raw (zone, alert_type) -> [dt, ...] from all rows
-    raw_events: dict = defaultdict(list)
-    unmatched: set   = set()
-    skipped_null_dt  = 0
-    unknown_types: set = set()
+    # Phase 1: collect per-zone (dt, alert_type, city) tuples for all 4 types
+    zone_events: dict  = defaultdict(list)  # zone -> [(dt, alert_type, city)]
+    unmatched: set     = set()
+    skipped_null_dt    = 0
 
     for row in df.itertuples(index=False):
         dt = row.dt
@@ -328,48 +382,62 @@ def aggregate(
             skipped_null_dt += 1
             continue
         alert_type = str(getattr(row, "alert_type", "Unknown") or "Unknown")
-        if alert_type not in ("Pre-alert", "Missile alert", "Drone alert", "Unknown"):
-            unknown_types.add(alert_type)
         cities = [c.strip() for c in re.split(r"[,،;|\n]+", str(row.city_raw)) if c.strip()]
         for city in cities:
             zone = city_to_zone.get(city)
             if zone:
-                raw_events[(zone, alert_type)].append(dt)
+                zone_events[zone].append((dt, alert_type, city))
             else:
                 unmatched.add(city)
 
     if skipped_null_dt:
         print(f"  Warning: dropped {skipped_null_dt:,} row(s) with missing timestamp.")
-    if unknown_types:
-        print(f"  Warning: unrecognised alert type(s) encountered: {sorted(unknown_types)}")
     if unmatched:
         print(f"\n  Note: {len(unmatched)} unmatched city names "
               f"(first 15): {sorted(unmatched)[:15]}")
 
-    # Phase 2: cluster per (zone, alert_type) — zone-level deduplication
-    zone_clustered: dict = {}
-    for (zone, alert_type), times in raw_events.items():
-        zone_clustered[(zone, alert_type)] = cluster_events(times)
+    # Phase 2: build incidents per zone
+    zone_incidents: dict = {}  # zone -> [incident_dict]
+    for zone, events in zone_events.items():
+        events_sorted = sorted(events, key=lambda x: x[0])
+        zone_incidents[zone] = build_incidents(events_sorted)
 
-    # Global cross-zone deduplication
-    incident_df = compute_global_incidents(zone_clustered)
+    # Phase 3: build zone_clustered for compute_global_incidents (first alert per incident)
+    zone_clustered: dict = defaultdict(list)
+    for zone, incidents in zone_incidents.items():
+        for inc in incidents:
+            for atype, dts in (("Pre-alert", inc["pre_dts"]),
+                               ("Missile alert", inc["missile_dts"]),
+                               ("Drone alert", inc["drone_dts"])):
+                if dts:
+                    zone_clustered[(zone, atype)].append(inc["start_dt"])
 
+    incident_df = compute_global_incidents(dict(zone_clustered))
+
+    # Phase 4: derive chart_df, zone_total, zone_night from incidents
     zone_total = defaultdict(int)
     zone_night = defaultdict(int)
     chart_rows: list = []
 
-    for (zone, alert_type), clustered_times in zone_clustered.items():
+    for zone, incidents in zone_incidents.items():
         group = ZONE_GROUP.get(zone, "Other")
-        for dt in clustered_times:
+        for inc in incidents:
+            dt = inc["start_dt"]
             zone_total[zone] += 1
             if is_night(dt.hour):
                 zone_night[zone] += 1
-            chart_rows.append({
-                "date_str":   dt.strftime("%Y-%m-%d"),
-                "hour":       dt.hour,
-                "group":      group,
-                "alert_type": alert_type,
-            })
+            date_str = dt.strftime("%Y-%m-%d")
+            hour     = dt.hour
+            for atype, dts in (("Pre-alert", inc["pre_dts"]),
+                               ("Missile alert", inc["missile_dts"]),
+                               ("Drone alert", inc["drone_dts"])):
+                if dts:
+                    chart_rows.append({
+                        "date_str":   date_str,
+                        "hour":       hour,
+                        "group":      group,
+                        "alert_type": atype,
+                    })
 
     if chart_rows:
         chart_df = (
@@ -381,6 +449,12 @@ def aggregate(
     else:
         chart_df = pd.DataFrame(columns=["date_str", "hour", "group", "alert_type", "count"])
 
+    open_count = sum(
+        1 for incs in zone_incidents.values() for inc in incs if not inc["closed"]
+    )
+    if open_count:
+        print(f"  Note: {open_count} incident(s) still open (no all-clear received yet).")
+
     return dict(zone_total), dict(zone_night), chart_df, incident_df
 
 
@@ -388,86 +462,81 @@ def aggregate(
 
 def compute_mismatches(df: pd.DataFrame, city_to_zone: dict) -> pd.DataFrame:
     """
-    For each city, pair Pre-alerts with Missile alerts within PAIR_WINDOW.
+    Derive Pre-alert / Missile / Drone pairing from incident membership.
 
-    A Pre-alert is 'paired'      if a Missile alert follows within 15 min.
-    A Pre-alert is 'pre_only'    if no Missile alert follows within 15 min.
-    A Missile alert is 'missile_only' if no Pre-alert preceded it within 15 min.
+    Pairing is determined by what alert types appear within the same incident
+    (delimited by "All clear" signals), not by a fixed time window.
 
-    Drone alerts are excluded from pairing.
+    event_type values:
+      paired_missile – incident has pre-alert(s) AND missile alert(s)
+      paired_drone   – incident has pre-alert(s) AND drone alert(s), no missile
+      pre_only       – incident has pre-alert(s) but no missile or drone
+      missile_only   – incident has missile alert(s) but no pre-alert
+      drone_only     – incident has drone alert(s) but no pre-alert
 
-    Returns DataFrame: [city, zone, group, date_str, event_type]
-    where event_type ∈ {'paired', 'pre_only', 'missile_only'}.
+    gap_seconds for paired events: time from first pre-alert to first missile/drone.
+
+    Returns DataFrame: [city, zone, group, date_str, event_type, gap_seconds]
+    One row per city per incident (cities preserved for future drill-down).
     """
-    # Build per-city alert lists
-    city_events: dict = defaultdict(list)
+    # Build per-zone event lists (all 4 types including "All clear")
+    zone_events: dict = defaultdict(list)
     _skipped = 0
     for row in df.itertuples(index=False):
-        raw        = str(row.city_raw).strip()
         dt         = row.dt
         alert_type = str(getattr(row, "alert_type", "Unknown") or "Unknown")
         if dt is None or pd.isna(dt):
             _skipped += 1
             continue
-        if alert_type not in ("Pre-alert", "Missile alert", "Drone alert"):
+        if alert_type not in ("Pre-alert", "Missile alert", "Drone alert", "All clear"):
             continue
-        cities = [c.strip() for c in re.split(r"[,،;|\n]+", raw) if c.strip()]
+        cities = [c.strip() for c in re.split(r"[,،;|\n]+", str(row.city_raw)) if c.strip()]
         for city in cities:
-            city_events[city].append((dt, alert_type))
+            zone = city_to_zone.get(city)
+            if zone:
+                zone_events[zone].append((dt, alert_type, city))
     if _skipped:
         print(f"  compute_mismatches: dropped {_skipped:,} row(s) with missing timestamp.")
 
     rows = []
-    for city, events in city_events.items():
-        zone = city_to_zone.get(city)
-        if not zone:
-            continue
-        group = ZONE_GROUP.get(zone, "Other")
+    for zone, events in zone_events.items():
+        group    = ZONE_GROUP.get(zone, "Other")
+        incidents = build_incidents(sorted(events, key=lambda x: x[0]))
 
-        pre_dts     = sorted(dt for dt, t in events if t == "Pre-alert")
-        missile_dts = sorted(dt for dt, t in events if t == "Missile alert")
-        drone_dts   = sorted(dt for dt, t in events if t == "Drone alert")
+        for inc in incidents:
+            has_pre     = bool(inc["pre_dts"])
+            has_missile = bool(inc["missile_dts"])
+            has_drone   = bool(inc["drone_dts"])
 
-        # Pre-alerts: missile takes priority over drone if both follow
-        for pre_dt in pre_dts:
-            has_missile = any(pre_dt <= m <= pre_dt + PAIR_WINDOW for m in missile_dts)
-            has_drone   = any(pre_dt <= d <= pre_dt + PAIR_WINDOW for d in drone_dts)
-            if has_missile:
-                gap = min((m - pre_dt).total_seconds()
-                          for m in missile_dts if pre_dt <= m <= pre_dt + PAIR_WINDOW)
+            if has_pre and has_missile:
                 evt = "paired_missile"
-            elif has_drone:
-                gap = min((d - pre_dt).total_seconds()
-                          for d in drone_dts if pre_dt <= d <= pre_dt + PAIR_WINDOW)
+                gap: Optional[float] = (
+                    min(inc["missile_dts"]) - inc["pre_dts"][0]
+                ).total_seconds()
+            elif has_pre and has_drone:
                 evt = "paired_drone"
-            else:
-                gap = None
+                gap = (min(inc["drone_dts"]) - inc["pre_dts"][0]).total_seconds()
+            elif has_pre:
                 evt = "pre_only"
-            rows.append({
-                "city": city, "zone": zone, "group": group,
-                "date_str":   pre_dt.strftime("%Y-%m-%d"),
-                "event_type": evt,
-                "gap_seconds": gap,
-            })
+                gap = None
+            elif has_missile:
+                evt = "missile_only"
+                gap = None
+            elif has_drone:
+                evt = "drone_only"
+                gap = None
+            else:
+                continue  # all-clear with no alerts — skip
 
-        # Missile alerts: missile_only if no pre-alert preceded within PAIR_WINDOW
-        for m_dt in missile_dts:
-            if not any(m_dt - PAIR_WINDOW <= p <= m_dt for p in pre_dts):
+            date_str = inc["start_dt"].strftime("%Y-%m-%d")
+            for city in inc["alert_cities"]:
                 rows.append({
-                    "city": city, "zone": zone, "group": group,
-                    "date_str":   m_dt.strftime("%Y-%m-%d"),
-                    "event_type": "missile_only",
-                    "gap_seconds": None,
-                })
-
-        # Drone alerts: drone_only if no pre-alert preceded within PAIR_WINDOW
-        for d_dt in drone_dts:
-            if not any(d_dt - PAIR_WINDOW <= p <= d_dt for p in pre_dts):
-                rows.append({
-                    "city": city, "zone": zone, "group": group,
-                    "date_str":   d_dt.strftime("%Y-%m-%d"),
-                    "event_type": "drone_only",
-                    "gap_seconds": None,
+                    "city":        city,
+                    "zone":        zone,
+                    "group":       group,
+                    "date_str":    date_str,
+                    "event_type":  evt,
+                    "gap_seconds": gap,
                 })
 
     if rows:
@@ -568,12 +637,19 @@ def build_gap_hist(mismatch_df: pd.DataFrame, event_type: str) -> dict:
     }
 
 
-def merge_chart_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge new chart_df rows into existing records, re-summing overlapping groups."""
+def merge_chart_df(existing_records: list, new_df: pd.DataFrame,
+                   drop_dates: Optional[set] = None) -> pd.DataFrame:
+    """Merge new chart_df rows into existing records, re-summing overlapping groups.
+
+    drop_dates: if provided, existing records for those date_str values are removed
+    before merging so re-examined incident windows replace rather than double-count.
+    """
     if not existing_records:
         return new_df
     existing_df = pd.DataFrame(existing_records)
-    combined    = pd.concat([existing_df, new_df], ignore_index=True)
+    if drop_dates:
+        existing_df = existing_df[~existing_df["date_str"].isin(drop_dates)]
+    combined = pd.concat([existing_df, new_df], ignore_index=True)
     return (
         combined
         .groupby(["date_str", "hour", "group", "alert_type"], as_index=False)["count"]
@@ -581,12 +657,19 @@ def merge_chart_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame
     )
 
 
-def merge_incident_df(existing_records: list, new_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge new incident_df rows into existing records, re-summing overlapping cells."""
+def merge_incident_df(existing_records: list, new_df: pd.DataFrame,
+                      drop_dates: Optional[set] = None) -> pd.DataFrame:
+    """Merge new incident_df rows into existing records, re-summing overlapping cells.
+
+    drop_dates: if provided, existing records for those date_str values are removed
+    before merging so re-examined incident windows replace rather than double-count.
+    """
     if not existing_records:
         return new_df
     existing_df = pd.DataFrame(existing_records)
-    combined    = pd.concat([existing_df, new_df], ignore_index=True)
+    if drop_dates:
+        existing_df = existing_df[~existing_df["date_str"].isin(drop_dates)]
+    combined = pd.concat([existing_df, new_df], ignore_index=True)
     return (
         combined
         .groupby(["date_str", "hour", "alert_type"], as_index=False)["count"]
@@ -2823,40 +2906,49 @@ def main() -> None:
         return
 
     # 4. Download CSV — incremental if we have a prior full-build timestamp.
-    # Fetch from (since_dt - MISMATCH_LOOKBACK) so that compute_mismatches() can
-    # re-examine the boundary window and catch Pre-alert / Missile pairs that
-    # straddled two consecutive runs.
+    # Fetch from (since_dt - INCIDENT_LOOKBACK) so that build_incidents() can
+    # close incidents whose alerts landed in a prior run but whose "All clear"
+    # arrives in this run.
     since_dt = pd.Timestamp(existing["fetched_at"]) if existing else None
-    mismatch_since_dt = (since_dt - MISMATCH_LOOKBACK) if since_dt is not None else None
-    raw = fetch_github_csv(since_dt=mismatch_since_dt)
+    incident_since_dt = (since_dt - INCIDENT_LOOKBACK) if since_dt is not None else None
+    raw = fetch_github_csv(since_dt=incident_since_dt)
     if raw is not None:
         df_extended = _normalise_df(raw)
-        # Chart aggregation uses only strictly new rows (same behaviour as before)
-        if since_dt is not None:
-            _since_naive = since_dt.tz_convert(None) if since_dt.tzinfo else since_dt
-            df = df_extended[df_extended["dt"] > _since_naive].copy()
-        else:
-            df = df_extended
     else:
         data_file = find_data_file()
         if data_file is None:
             print("\nNo data found. Place an .xlsx/.csv in data/ or check network.")
             sys.exit(1)
-        df = load_alerts(data_file)
-        df_extended = df
+        df_extended = load_alerts(data_file)
 
-    # 5. Aggregate new rows
+    # 5. Aggregate — always over the full lookback window so incident boundaries
+    # are correctly detected even when they straddle two consecutive runs.
     print("\nAggregating alerts by zone …")
-    zone_total, zone_night, new_chart_df, new_incident_df = aggregate(df, city_to_zone)
+    zone_total, zone_night, new_chart_df, new_incident_df = aggregate(df_extended, city_to_zone)
     total_alerts = sum(zone_total.values())
     total_night  = sum(zone_night.values())
     print(f"  Deduplicated alert events : {total_alerts:,}")
     print(f"  Of which at night         : {total_night:,}  "
           f"({round(total_night / total_alerts * 100, 1) if total_alerts else 0}%)")
 
-    # Merge with historical chart_df from prior build
-    chart_df    = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df)
-    incident_df = merge_incident_df(existing.get("incident_df", []) if existing else [], new_incident_df)
+    # Calendar dates in the lookback window are replaced rather than summed in
+    # the merge to prevent double-counting re-examined incidents.
+    if since_dt is not None and incident_since_dt is not None:
+        _lb_start = incident_since_dt.date() if hasattr(incident_since_dt, "date") else incident_since_dt.to_pydatetime().date()
+        _lb_end   = since_dt.date() if hasattr(since_dt, "date") else since_dt.to_pydatetime().date()
+        lookback_dates: set = set()
+        _d = _lb_start
+        while _d <= _lb_end:
+            lookback_dates.add(_d.isoformat())
+            _d += timedelta(days=1)
+    else:
+        lookback_dates = None
+
+    # Merge with historical chart_df from prior build (dropping lookback dates first)
+    chart_df    = merge_chart_df(existing["chart_df"] if existing else [], new_chart_df,
+                                 drop_dates=lookback_dates)
+    incident_df = merge_incident_df(existing.get("incident_df", []) if existing else [], new_incident_df,
+                                    drop_dates=lookback_dates)
 
     # 5b. Detect partial day from the merged chart_df
     last_date    = chart_df["date_str"].dropna().max() if not chart_df.empty else None
@@ -2897,19 +2989,8 @@ def main() -> None:
         new_mismatch_df.to_excel(xlsx_path, index=False)
         print(f"  Saved → {xlsx_path}")
 
-    # Calendar dates covered by the lookback window; existing mismatch_agg records for
-    # those dates are replaced rather than summed (avoids double-counting re-examined events).
-    if since_dt is not None and mismatch_since_dt is not None:
-        _lb_start = mismatch_since_dt.date() if hasattr(mismatch_since_dt, "date") else mismatch_since_dt.to_pydatetime().date()
-        _lb_end   = since_dt.date()          if hasattr(since_dt, "date")          else since_dt.to_pydatetime().date()
-        lookback_dates: set = set()
-        _d = _lb_start
-        while _d <= _lb_end:
-            lookback_dates.add(_d.isoformat())
-            _d += timedelta(days=1)
-    else:
-        lookback_dates = None
-
+    # lookback_dates already computed above; reused here to replace mismatch records
+    # for the same window (consistent with chart_df / incident_df drop-replace).
     mismatch_agg, gap_missile_h, gap_drone_h = merge_mismatch(
         existing.get("mismatch_agg", []) if existing else [],
         existing.get("gap_missile_hist", {}) if existing else {},
