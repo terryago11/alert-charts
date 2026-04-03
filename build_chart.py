@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from main import build_chart, compute_situation
+from aggregator import compute_situation
+from chart_builder import build_chart
 
 DATA_FILE = Path("data/processed.json")
 
