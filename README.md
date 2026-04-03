@@ -114,6 +114,13 @@ Display regions (e.g. "Galilee", "Jerusalem", "Gaza Area") are used for chart co
 
 ## Recent improvements
 
+### Security & Accessibility
+- **Color contrast** — three region colors that failed WCAG AA on white backgrounds have
+  been darkened: Galilee, Tel Aviv / Gush Dan, and Sharon / Shephelah. Sublabel and footer
+  text lightened from `#888` to `#666` for improved readability at small sizes
+- **XSS hardening** — tab button labels are now set via `createTextNode` rather than
+  `innerHTML`, ensuring translation strings can never inject HTML markup
+
 ### Performance
 - Replaced all `iterrows()` loops with `itertuples()` in the core processing pipeline
   (`aggregate`, `compute_mismatches`, `compute_salvos`) — approximately 10× faster on

@@ -142,15 +142,14 @@ individual city-level alerts.
 
 Planned improvements, grouped by PR. Each can be a standalone session.
 
-### PR: Security & Accessibility
-- **XSS hardening** — audit all `.innerHTML` assignments in the JS template; replace with
-  `.textContent` for plain strings. Currently safe (translations are hardcoded), but latent
-  risk if translations ever come from an external source. (`main.py` ~lines 2555, 2597–2613)
-- **Color contrast** — several light region colors in `regions.py` (`GROUP_COLORS`) fail
-  WCAG AA on white backgrounds: `#aec7e8` (Sharon), `#98df8a` (Galilee), `#56aeff` (Tel Aviv).
-  Sublabel/footer text (`#888`) is borderline. Darken for light-mode labels.
-- **Active filter badge** — when a date-from/to filter is non-default, show a small pill
-  (e.g. "Filtered: Mar 1 – Mar 15") in the filter row so users know a filter is active.
+### ~~PR: Security & Accessibility~~ ✅ Done
+- **XSS hardening** — tab buttons now set the icon via `innerHTML` (safe hardcoded entity
+  only) and append the translated label via `createTextNode`; `T.*` values can no longer
+  inject HTML. Remaining intentional `innerHTML` uses are explicitly commented.
+- **Color contrast** — three region colors that failed WCAG AA on white backgrounds darkened:
+  Galilee `#98df8a`→`#3d8b37`, Tel Aviv `#56aeff`→`#1a6bc9`, Sharon `#aec7e8`→`#4a7bb5`.
+  Sublabel/footer text `#888`→`#666` across `.sit-sublabel`, `.sit-quiet`, `#global-footer`,
+  `.sit-explainer`.
 
 ### PR: New Visualizations
 - **Day-of-week heatmap** — rows = Mon–Sun, columns = regions (or alert type), cells =
