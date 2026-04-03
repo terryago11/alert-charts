@@ -36,10 +36,11 @@ Column detection is keyword-based — see `_detect_column()` and `_normalise_df(
 ## Key concepts
 
 ### Alert types
-Three types (must appear verbatim in the `alert_type` column):
+Four types recognised in `ALERT_TRANSLATIONS` (mapped from Hebrew `category_desc`):
 - `Pre-alert` — early warning, typically 1–3 minutes before impact
 - `Missile alert` — active siren / rocket alert
 - `Drone alert` — UAV intrusion
+- `All clear` — incident ended (3 Hebrew variants: generic, missile-specific, drone-specific)
 
 ### Location hierarchy
 ```
@@ -49,33 +50,38 @@ city (~1,450 names)  →  zone (33 HFC zones)  →  region group (11 display gro
 - Zone → region group mapping is in `regions.py` (`ZONE_GROUP`)
 - Region group colours are in `regions.py` (`GROUP_COLORS`)
 
-### Deduplication / event clustering
-`aggregate()` uses **90-second temporal clustering per `(zone, alert_type)`**:
-alerts to the same zone within `EVENT_CLUSTER_WINDOW` (90 s) of each other are
-treated as a single alert event (the "spread" of one missile/drone across nearby
-cities).  The first alert in a cluster is the representative timestamp.
+### Incident detection
+`aggregate()` uses **signal-based incident detection** via `build_incidents()`:
+- An incident **opens** on the first Pre-alert / Missile alert / Drone alert to a zone
+- An incident **closes** when an "All clear" record maps to the same zone
+- Incidents with no closing all-clear are marked `closed=False` (still counted)
+- Each incident stores `alert_cities` (cities that received alerts) and `cities`
+  (full set incl. all-clear cities) for future drill-down
 
-This is a two-phase approach:
-1. Collect all `(zone, alert_type, dt)` tuples from raw rows (with city lookup)
-2. For each `(zone, alert_type)` pair, sort by time and call `cluster_events()`
-   → one representative timestamp per cluster → one chart row per event
+Two-phase approach:
+1. Collect per-zone `(dt, alert_type, city)` tuples for all 4 types
+2. For each zone, sort by time and call `build_incidents()` → list of incident dicts
 
-All counts throughout the dashboard represent **deduplicated alert events**, not
-individual city-level alerts.
+`compute_global_incidents()` then applies the same 90-second `cluster_events()`
+window **across zones** to collapse simultaneous multi-zone events into single
+global incident counts (used only for `incident_df`).
+
+All counts throughout the dashboard represent **incidents**, not individual
+city-level alerts.
 
 ### Mismatch analysis
-`compute_mismatches()` works at **city level** with a 15-minute pairing window:
-- A `Pre-alert` is `paired` if a `Missile alert` follows within 15 min for the same city
-- A `Pre-alert` is `pre_only` if no missile follows within 15 min
-- A `Missile alert` is `missile_only` if no pre-alert preceded it within 15 min
-- Drone alerts are excluded from pairing
+`compute_mismatches()` derives pairing from **incident membership**, not a time window:
+- `paired_missile` — incident has ≥1 pre-alert AND ≥1 missile alert
+- `paired_drone` — incident has ≥1 pre-alert AND ≥1 drone alert (no missile)
+- `pre_only` — incident has pre-alert(s) but no missile or drone
+- `missile_only` — incident has missile alert(s) but no pre-alert
+- `drone_only` — incident has drone alert(s) but no pre-alert
+- Emits one row per city (`alert_cities`) per incident for city-level drill-down
 
 ### Salvo analysis
-`compute_salvos()` finds clusters of repeated `Missile alert` events to the same zone:
-- A **salvo cluster** = 2+ missile alert events to the same zone where the gap between every consecutive pair ≤ `SALVO_WINDOW` (30 min)
-- Uses `cluster_events()` (90-second window) before clustering — consistent with `aggregate()`
-- Output: one row per cluster with `zone`, `group`, `date_str`, `cluster_start` (ISO string), `cluster_size` (event count)
-- All four columns (including `cluster_start`) are serialised to JS; the chart groups by `(date_str, hour)` client-side to produce one line per day on a 24-hour X axis
+`compute_salvos()` is **dead code** — never called. The Salvos chart renders
+client-side in JS directly from `chart_df` (`hourlyData`), filtering for
+`alert_type === 'Missile alert'` and grouping by hour. No Python changes needed.
 
 ### Situation Room
 `compute_situation(chart_df)` computes time-bounded summaries for the Situation Room tab:
@@ -150,6 +156,21 @@ Planned improvements, grouped by PR. Each can be a standalone session.
   Galilee `#98df8a`→`#3d8b37`, Tel Aviv `#56aeff`→`#1a6bc9`, Sharon `#aec7e8`→`#4a7bb5`.
   Sublabel/footer text `#888`→`#666` across `.sit-sublabel`, `.sit-quiet`, `#global-footer`,
   `.sit-explainer`.
+
+### ~~PR: Signal-Based Incident Detection~~ ✅ Done
+- **`build_incidents()`** — new core function; groups per-zone events into incidents
+  delimited by "All clear" signals instead of a fixed 90-second time window.
+- **`aggregate()` rewrite** — uses `build_incidents()` per zone; city membership
+  preserved in `alert_cities` and `cities` sets for future drill-down.
+- **`compute_mismatches()` simplified** — pairing via incident membership, removing
+  the 15-minute `PAIR_WINDOW` heuristic.
+- **`INCIDENT_LOOKBACK = 6 h`** replaces `MISMATCH_LOOKBACK = 30 min`; wider window
+  ensures all-clear signals that arrive in a later incremental run still close their
+  incident correctly.
+- **`merge_chart_df()` / `merge_incident_df()`** — `drop_dates` param added to
+  replace rather than double-count dates in the lookback window.
+- **Schema version bumped** to 5 for automatic one-time full reprocess.
+- **All chart text updated** (EN + HE) to reflect the new incident model.
 
 ### PR: New Visualizations
 - **Day-of-week heatmap** — rows = Mon–Sun, columns = regions (or alert type), cells =

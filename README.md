@@ -19,7 +19,7 @@ Each section shows a scrollable list of active hours. Every row displays:
 - **Alert event counts** as emoji badges — 🚀 missile, ⚡ pre-alert, 🛩 drone
 - **Coloured dots** for each affected region
 
-Hover a badge to see the exact definition (e.g. *"missile alert events — same zone within 90 s = 1 event"*).
+Hover a badge to see the exact definition (e.g. *"missile alert events — one incident per zone per all-clear signal"*).
 
 Click any row to open a **region breakdown popup** — a stacked bar chart showing how alert events were distributed across regions for that hour.
 
@@ -35,18 +35,18 @@ Cumulative **alert events** per region over time.
 Range selector buttons (1w / 2w / All) and a drag slider for quick navigation.
 
 ### Mismatches
-Stacked bar chart showing, for each calendar day, how many events were:
+Stacked bar chart showing, for each calendar day, how many incidents were:
 
 | Category | Meaning |
 |----------|---------|
-| **Paired** | Pre-alert followed by a missile alert within 15 minutes (same city) |
-| **Pre-alert only** | Pre-alert with no missile alert following within 15 minutes |
-| **Missile only** | Missile alert with no preceding pre-alert within 15 minutes |
+| **Paired** | Incident containing both a pre-alert and a missile alert |
+| **Pre-alert only** | Incident with a pre-alert but no missile alert |
+| **Missile only** | Incident with a missile alert but no preceding pre-alert |
 
 Toggle between absolute counts and percentage (ratio) view.
 
 ### Lead Time
-Histogram of the gap (in minutes) between a pre-alert and its paired missile alert.
+Histogram of the gap (in seconds) between the first pre-alert and the first missile alert in the same incident.
 Filter by region to compare warning times across the country.
 
 ### Salvos
@@ -66,8 +66,11 @@ Overlaid line chart — one line per day — showing **missile alert events** by
 
 ### Counting methodology
 
-All counts are **deduplicated alert events**, not individual city notifications.
-Alerts fired to the same zone within **90 seconds** of each other are treated as a single event (one missile/drone spreading its alert across nearby cities). This prevents inflating counts when a single threat triggers rapid sequential alerts to multiple neighbouring cities in the same zone.
+All counts are **incidents**, not individual city notifications.
+
+An incident **opens** when the first alert (pre-alert, missile, or drone) is received for a zone, and **closes** when an "all clear" record (האירוע הסתיים) is received for any city in that zone. The source data from the Homefront Command API includes explicit all-clear signals, so incident boundaries are signal-driven rather than time-window heuristics.
+
+A 90-second window is still applied across zones to collapse simultaneous multi-zone events into single global incident counts.
 
 ## Quick start
 
@@ -113,6 +116,13 @@ Zones come directly from the official Homefront Command taxonomy.
 Display regions (e.g. "Galilee", "Jerusalem", "Gaza Area") are used for chart colouring only.
 
 ## Recent improvements
+
+### Signal-based incident detection
+- **Replaced 90-second heuristic clustering** with signal-based incident boundaries: incidents now open on the first alert to a zone and close when an "All clear" record arrives for that zone
+- **`build_incidents()`** — new core function preserving city membership for future city-level drill-down
+- **Mismatch analysis** updated to use incident membership for pairing (pre-alert + missile in same incident = paired), removing the 15-minute time window
+- **Incremental builds** use a 6-hour lookback window so all-clear signals that arrive in a later run still correctly close their incident
+- All chart text (English + Hebrew) updated to reflect the new model
 
 ### Security & Accessibility
 - **Color contrast** — three region colors that failed WCAG AA on white backgrounds have
