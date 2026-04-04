@@ -20,18 +20,18 @@ HTML dashboard at `output/index.html`.
 ```bash
 pip install -r requirements.txt
 python main.py
-open output/ira_alerts.html
+open output/index.html
 ```
 
 ## Data sources
 
 | Source | How to configure |
 |--------|-----------------|
-| GitHub CSV (live) | Fetched automatically from `dleshem/israel-alerts-data`; set `ALERT_CUTOFF_DATE` env var (or fall back to hardcoded `CUTOFF_DATE` in `main.py`) to adjust the start of the monitoring period |
+| GitHub CSV (live) | Fetched automatically from `dleshem/israel-alerts-data`; set `ALERT_CUTOFF_DATE` env var (or fall back to hardcoded `CUTOFF_DATE` in `data_loader.py`) to adjust the start of the monitoring period |
 | Local file (fallback) | Place any `.xlsx`, `.xls`, or `.csv` in `data/` |
 
 Alert data must have columns for city/location, date+time, and alert type.
-Column detection is keyword-based — see `_detect_column()` and `_normalise_df()`.
+Column detection is keyword-based — see `_detect_column()` and `_normalise_df()` in `data_loader.py`.
 
 ## Key concepts
 
@@ -103,7 +103,10 @@ client-side in JS directly from `chart_df` (`hourlyData`), filtering for
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Entry point; all data loading, aggregation, mismatch analysis, chart HTML |
+| `main.py` | Thin entry point: `print_summary()` + `main()` orchestration (~175 lines) |
+| `data_loader.py` | City mapping, GitHub CSV fetch, normalisation, `save_processed()` |
+| `aggregator.py` | Incident detection, mismatch/salvo analysis, merge helpers, `compute_situation()` |
+| `chart_builder.py` | `build_chart()` (~2,000 lines of HTML/JS) + `save_situation_json()` |
 | `build_chart.py` | Fast style-only rebuild from `data/processed.json` (no network) |
 | `regions.py` | `ZONE_GROUP`, `GROUP_COLORS`, `NIGHT_START`/`NIGHT_END` constants |
 | `data/cities.json` | City → zone mapping from pikud-haoref-api (not committed) |
@@ -184,12 +187,13 @@ Planned improvements, grouped by PR. Each can be a standalone session.
 - **Salvo size distribution** — `compute_salvos()` already produces `cluster_size` (events per
   cluster). Add a histogram showing how often salvos have 2 vs 5 vs 10+ events.
 
-### PR: Refactor
-- **Split `main.py`** (~2,900 lines) into focused modules:
-  - `data_loader.py` — `load_alerts()`, `_normalise_df()`, `load_city_data()`, `fetch_github_csv()`
-  - `aggregator.py` — `aggregate()`, `compute_mismatches()`, `compute_salvos()`, `compute_situation()`
-  - `chart_builder.py` — the `build_chart()` function (~2,000 lines of HTML/JS template)
-  - Keep `main.py` as a thin entry point that orchestrates the above.
+### ~~PR: Refactor~~ ✅ Done
+- **Split `main.py`** (~3,000 lines) into focused modules:
+  - `data_loader.py` — `load_alerts()`, `_normalise_df()`, `load_city_data()`, `fetch_github_csv()`, `save_processed()`
+  - `aggregator.py` — `aggregate()`, `compute_mismatches()`, `compute_salvos()`, `compute_situation()`, merge helpers
+  - `chart_builder.py` — `build_chart()` (~2,000 lines of HTML/JS template) + `save_situation_json()`
+  - `main.py` — thin entry point: `print_summary()` + `main()` (~175 lines)
+  - `build_chart.py` — import paths updated to point at new modules
 
 ### PR: Tests
 - **`cluster_events()`** — edge cases: empty list, single item, all within window, gap exactly
